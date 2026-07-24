@@ -1,0 +1,37 @@
+<idea-plugin>
+    <id>dev.vanssa.claudeacp</id>
+    <name>Claude Subscription ACP Agent</name>
+    <vendor>vanssa</vendor>
+
+    <description><![CDATA[
+        Adds a <b>Claude Subscription</b> agent to JetBrains AI chat that authenticates
+        with a Claude.ai Pro/Max subscription.<br/><br/>
+
+        The Claude agent bundled with the IDE is launched with <code>--hide-claude-auth</code>,
+        which removes the subscription auth method and rejects subscription credentials at
+        session start with <i>"This integration does not support using claude.ai subscriptions"</i> —
+        surfacing as <i>"Authentication was reset. Please create a new chat for the change to
+        take effect."</i><br/><br/>
+
+        This plugin registers the same official
+        <code>@agentclientprotocol/claude-agent-acp</code> package as a local agent without
+        that flag, and gives it the Claude icon. Nothing is patched: the package supports
+        subscriptions by default.<br/><br/>
+
+        Not affiliated with or endorsed by Anthropic or JetBrains.
+    ]]></description>
+
+    <depends>com.intellij.modules.platform</depends>
+    <depends>com.intellij.ml.llm</depends>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <postStartupActivity implementation="dev.vanssa.claudeacp.ClaudeAgentProvisioner"/>
+        <notificationGroup id="Claude Subscription ACP" displayType="BALLOON"/>
+    </extensions>
+
+    <!-- Internal AI Assistant extension point; see ClaudeAgentIconService for why
+         order="first" matters. -->
+    <extensions defaultExtensionNs="com.intellij.ml.llm.core.chat.ui">
+        <agentIconService implementation="dev.vanssa.claudeacp.ClaudeAgentIconService" order="first"/>
+    </extensions>
+</idea-plugin>

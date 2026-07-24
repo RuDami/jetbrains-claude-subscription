@@ -1,0 +1,11 @@
+<?xml version='1.1' ?>
+<ivy-module version="2.0">
+  <info organisation="localPlugin" module="com.intellij.ml.llm" revision="PS-262.8665.325-262.8665.344" />
+  <configurations>
+    <conf name="default" visibility="public" />
+  </configurations>
+  <publications>
+    <artifact name="home/vanssa/.local/share/JetBrains/PhpStorm2026.2/ml-llm" ext="directory" conf="default" />
+  </publications>
+  <dependencies />
+</ivy-module>
