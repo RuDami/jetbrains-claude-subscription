@@ -14,7 +14,7 @@ Install it and the agent appears. There is nothing else to run.
 
 JetBrains launches its bundled Claude agent like this:
 
-```
+```text
 npx -y @agentclientprotocol/claude-agent-acp@0.62.0 --hide-claude-auth
 ```
 
@@ -117,7 +117,7 @@ what to install — not a silent failure.
 State lives in `claude-subscription-acp.xml`:
 
 | Key | Default | Meaning |
-|---|---|---|
+| --- | --- | --- |
 | `manageAgent` | `true` | Turn off to stop the plugin touching `acp.json` and manage the entry yourself. |
 | `displayName` | `Claude Subscription` | Also determines the agent id the IDE derives, and therefore icon matching. |
 | `packageSpec` | `@agentclientprotocol/claude-agent-acp@0.62.0` | Pinned deliberately — the guard being worked around lives in this package. |
@@ -158,3 +158,7 @@ agent appears.
 JetBrains plugin so the agent is visually recognisable. This project is a personal
 integration tool, not affiliated with or endorsed by Anthropic or JetBrains, and the mark
 remains Anthropic's.
+
+## License
+
+[MIT](LICENSE) — except `icons/claude.svg`, which is Anthropic's mark (see Attribution).
