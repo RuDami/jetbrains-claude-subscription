@@ -1,5 +1,9 @@
 # Claude Subscription ACP Agent
 
+> **Unofficial plugin.** A personal community project — not affiliated with, endorsed by,
+> or supported by JetBrains or Anthropic. It is not distributed on JetBrains Marketplace;
+> install it from the release zip below.
+
 A JetBrains plugin that adds a **Claude Subscription** agent to AI chat — one that
 authenticates with a Claude.ai Pro/Max subscription instead of demanding Anthropic
 Console API billing.
@@ -46,15 +50,22 @@ bundled entry.
 
 ## Install
 
-Build it, then `Settings → Plugins → ⚙ → Install Plugin from Disk…`:
+**[⬇ Download jetbrains-claude-subscription-0.1.0.zip](https://github.com/vanssata/jetbrains-claude-subscription/releases/download/v0.1.0/jetbrains-claude-subscription-0.1.0.zip)**
+— or pick the newest zip from the [releases page](https://github.com/vanssata/jetbrains-claude-subscription/releases).
+
+Then in the IDE: `Settings → Plugins → ⚙ → Install Plugin from Disk…`, choose the zip
+(do not unzip it), and restart.
+
+### Building from source instead
 
 ```bash
 JAVA_HOME=/path/to/a/jdk ./gradlew buildPlugin
 # build/distributions/jetbrains-claude-subscription-0.1.0.zip
 ```
 
-`gradle.properties` sets `platformLocalPath` to a locally installed IDE so the build
-does not download a full platform. Point it at your own installation.
+`gradle.properties` sets `platformLocalPath` and `aiAssistantPluginPath` to a locally
+installed IDE so the build does not download a full platform. Point them at your own
+installation.
 
 On first startup the agent is registered and a notification confirms it. Select
 **Claude Subscription** in the AI chat agent picker and authenticate — the browser flow
