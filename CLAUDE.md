@@ -64,4 +64,6 @@ Do not add comments that restate the code.
 ## Git
 
 Conventional Commits (`feat:`, `fix:`, `docs:`). Work on a feature branch rather than
-committing to `master`. There is no remote configured yet.
+committing to `master`. The remote is `github.com/vanssata/jetbrains-claude-subscription`
+(public); releases carry the built plugin zip as a direct-download asset, so tagging a
+release means attaching a freshly built `build/distributions/*.zip`.
