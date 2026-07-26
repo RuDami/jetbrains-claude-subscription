@@ -1,0 +1,29 @@
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+
+[*.{kt,kts}]
+indent_style = space
+indent_size = 4
+max_line_length = 130
+
+# `intellij_idea`, not ktlint's own `ktlint_official` style: this codebase carries long
+# hand-wrapped KDoc and rationale comments, and the official style's extra wrapping and
+# blank-line rules would reflow them into noise.
+ktlint_code_style = intellij_idea
+
+# Two rules disabled because the existing code deliberately does otherwise, and the
+# alternative was reformatting working code to satisfy a linter added after the fact:
+#   function-signature  — expression bodies here start on the line below the signature
+#   multiline-if-else   — brace-free multiline if/else is used inside argument lists
+# Everything else (imports, indentation, trailing whitespace, blank lines) is enforced.
+ktlint_standard_function-signature = disabled
+ktlint_standard_multiline-if-else = disabled
+
+[*.{sh,xml,svg,json,yml,yaml,md}]
+indent_style = space
+indent_size = 2
