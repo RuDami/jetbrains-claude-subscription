@@ -12,4 +12,12 @@ Added here: npm-based adapter installation with rollback, npm registry update ch
 a settings page, an environment-sanitising launcher script, IDE-aware Node resolution,
 and removal of the agent entry on uninstall.
 
+At runtime this plugin installs and launches
+  @agentclientprotocol/claude-agent-acp
+  https://github.com/agentclientprotocol/claude-agent-acp
+  Apache-2.0, by Anthropic, Zed Industries and JetBrains.
+It is fetched from the npm registry on the user's machine — not bundled here, not modified.
+The plugin only chooses the version and the command line, omitting the --hide-claude-auth
+flag that the IDE's own Claude agent passes.
+
 Not affiliated with or endorsed by Anthropic or JetBrains.

@@ -9,7 +9,8 @@
 > Не affiliated с Anthropic или JetBrains.
 
 Плагин для JetBrains IDE (WebStorm 2026.2), который добавляет в AI Chat агента
-**Claude Code (Subscription)**, работающего на подписке Claude Pro/Max, сам ставит ACP-адаптер
+**Claude Code (Subscription)**, работающего на подписке Claude Pro/Max. Сам ставит официальный
+ACP-адаптер [`@agentclientprotocol/claude-agent-acp`](https://github.com/agentclientprotocol/claude-agent-acp)
 и обновляет его из IDE.
 
 ## Зачем
@@ -89,3 +90,16 @@ AI Assistant не входит в дистрибутив IDE и обновляе
 
 `bin/claude-acp-sub` — тот же запуск адаптера как shell-скрипт, для случая без плагина
 (другая IDE, Zed, отладка). Требует `npm install` в корне репозитория.
+
+## Ссылки
+
+- [`@agentclientprotocol/claude-agent-acp`](https://github.com/agentclientprotocol/claude-agent-acp)
+  ([npm](https://www.npmjs.com/package/@agentclientprotocol/claude-agent-acp), Apache-2.0,
+  Anthropic / Zed Industries / JetBrains) — собственно ACP-адаптер. Плагин его не содержит и
+  не патчит: ставит через npm и запускает без `--hide-claude-auth`. Вся работа с моделью,
+  инструментами и авторизацией — там.
+- [Agent Client Protocol](https://agentclientprotocol.com) — протокол, на котором говорят IDE и агент.
+- [ACP в JetBrains AI Assistant](https://www.jetbrains.com/help/ai-assistant/acp.html) — как IDE
+  подхватывает кастомных агентов и схема `~/.jetbrains/acp.json`.
+- [vanssata/jetbrains-claude-subscription](https://github.com/vanssata/jetbrains-claude-subscription)
+  — апстрим этого форка (MIT).

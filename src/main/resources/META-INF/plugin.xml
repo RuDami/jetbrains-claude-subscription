@@ -12,12 +12,19 @@
     which removes the subscription auth method and rejects subscription credentials at
     session start with <i>"This integration does not support using claude.ai subscriptions"</i>.<br/><br/>
 
-    This plugin installs the official <code>@agentclientprotocol/claude-agent-acp</code>
-    package into its own directory and registers it as a local agent without that flag.
+    This plugin installs the official
+    <a href="https://github.com/agentclientprotocol/claude-agent-acp">@agentclientprotocol/claude-agent-acp</a>
+    adapter into its own directory and registers it as a local agent without that flag.
     Nothing is patched: the package supports subscriptions by default. It also polls the npm
     registry for new adapter versions and can install them without restarting the IDE.<br/><br/>
 
-    Derived from <a href="https://github.com/vanssata/jetbrains-claude-subscription">vanssata/jetbrains-claude-subscription</a> (MIT).<br/>
+    <b>Credits.</b> The adapter doing the actual work is
+    <a href="https://www.npmjs.com/package/@agentclientprotocol/claude-agent-acp">@agentclientprotocol/claude-agent-acp</a>
+    (Apache-2.0, by Anthropic, Zed Industries and JetBrains). It is downloaded from npm on your
+    machine rather than bundled here. This plugin is derived from
+    <a href="https://github.com/vanssata/jetbrains-claude-subscription">vanssata/jetbrains-claude-subscription</a> (MIT).<br/>
+    Requires Node.js 22+ and the JetBrains AI Assistant plugin.<br/><br/>
+
     Not affiliated with or endorsed by Anthropic or JetBrains.
   ]]></description>
 
