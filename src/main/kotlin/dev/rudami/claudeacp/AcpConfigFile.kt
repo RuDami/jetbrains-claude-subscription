@@ -1,4 +1,4 @@
-package dev.vanssa.claudeacp
+package dev.rudami.claudeacp
 
 import com.google.gson.GsonBuilder
 import com.google.gson.JsonObject

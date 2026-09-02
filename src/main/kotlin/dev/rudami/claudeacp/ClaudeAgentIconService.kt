@@ -1,4 +1,4 @@
-package dev.vanssa.claudeacp
+package dev.rudami.claudeacp
 
 import com.intellij.icons.AllIcons
 import com.intellij.ml.llm.core.chat.ui.AgentIconService

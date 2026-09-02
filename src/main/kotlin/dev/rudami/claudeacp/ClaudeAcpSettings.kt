@@ -1,4 +1,4 @@
-package dev.vanssa.claudeacp
+package dev.rudami.claudeacp
 
 import com.intellij.openapi.components.BaseState
 import com.intellij.openapi.components.Service

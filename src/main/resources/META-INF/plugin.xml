@@ -1,7 +1,7 @@
 <idea-plugin>
-    <id>dev.vanssa.claudeacp</id>
+    <id>dev.rudami.claudeacp</id>
     <name>Claude Subscription ACP Agent</name>
-    <vendor>vanssa</vendor>
+    <vendor>rudami</vendor>
 
     <description><![CDATA[
         Adds a <b>Claude Subscription</b> agent to JetBrains AI chat that authenticates
@@ -25,13 +25,13 @@
     <depends>com.intellij.ml.llm</depends>
 
     <extensions defaultExtensionNs="com.intellij">
-        <postStartupActivity implementation="dev.vanssa.claudeacp.ClaudeAgentProvisioner"/>
+        <postStartupActivity implementation="dev.rudami.claudeacp.ClaudeAgentProvisioner"/>
         <notificationGroup id="Claude Subscription ACP" displayType="BALLOON"/>
     </extensions>
 
     <!-- Internal AI Assistant extension point; see ClaudeAgentIconService for why
          order="first" matters. -->
     <extensions defaultExtensionNs="com.intellij.ml.llm.core.chat.ui">
-        <agentIconService implementation="dev.vanssa.claudeacp.ClaudeAgentIconService" order="first"/>
+        <agentIconService implementation="dev.rudami.claudeacp.ClaudeAgentIconService" order="first"/>
     </extensions>
 </idea-plugin>

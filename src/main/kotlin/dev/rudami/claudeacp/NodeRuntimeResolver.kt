@@ -1,4 +1,4 @@
-package dev.vanssa.claudeacp
+package dev.rudami.claudeacp
 
 import java.io.File
 import java.nio.file.Path

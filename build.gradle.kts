@@ -6,7 +6,7 @@ plugins {
     id("org.jmailen.kotlinter") version "5.2.0"
 }
 
-group = "dev.vanssa"
+group = "dev.rudami"
 version = "0.1.0"
 
 repositories {
