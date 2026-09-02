@@ -1,4 +1,4 @@
-# jetbrains-claude-subscription
+# Claude Code ACP Bridge (Subscription)
 
 > Форк [vanssata/jetbrains-claude-subscription](https://github.com/vanssata/jetbrains-claude-subscription)
 > (MIT). Оттуда взяты `AcpConfigFile`, extension point иконки и схема сборки против локальной
@@ -9,7 +9,7 @@
 > Не affiliated с Anthropic или JetBrains.
 
 Плагин для JetBrains IDE (WebStorm 2026.2), который добавляет в AI Chat агента
-**Claude Subscription**, работающего на подписке Claude Pro/Max, сам ставит ACP-адаптер
+**Claude Code (Subscription)**, работающего на подписке Claude Pro/Max, сам ставит ACP-адаптер
 и обновляет его из IDE.
 
 ## Зачем
@@ -42,14 +42,14 @@
 
 ## Настройки
 
-`Settings | Tools | Claude Subscription Agent`: политика обновлений (уведомлять / ставить
+`Settings | Tools | Claude Code ACP Bridge`: политика обновлений (уведомлять / ставить
 молча / не проверять), интервал, пин версии, выбор установленной версии, MCP-флаги,
 явный путь к node, удаление записи из `acp.json`.
 
 ## Установка
 
 Готовый билд лежит в [`dist/`](dist/). `Settings | Plugins | ⚙ | Install Plugin from Disk`,
-выбрать zip, перезапустить IDE. Дальше агент **Claude Subscription** появится в списке
+выбрать zip, перезапустить IDE. Дальше агент **Claude Code (Subscription)** появится в списке
 AI Chat: Log in → **Claude Subscription**.
 
 Требуется WebStorm (или другая JetBrains IDE) 2026.2 с установленным AI Assistant и
@@ -63,7 +63,7 @@ Node.js 22+ — либо любой свой, либо тот, что IDE ска
 JAVA_HOME=/Applications/WebStorm.app/Contents/jbr/Contents/Home ./gradlew buildPlugin
 ```
 
-Артефакт — `build/distributions/jetbrains-claude-subscription-<version>.zip`, ставится через
+Артефакт — `build/distributions/claude-code-acp-bridge-<version>.zip`, ставится через
 `Settings | Plugins | ⚙ | Install Plugin from Disk`.
 
 Пути в `gradle.properties` под конкретную машину:

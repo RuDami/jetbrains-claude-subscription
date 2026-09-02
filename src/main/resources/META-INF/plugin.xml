@@ -1,10 +1,10 @@
 <idea-plugin>
   <id>dev.rudami.claudeacp</id>
-  <name>Claude Subscription ACP Agent (managed)</name>
+  <name>Claude Code ACP Bridge (Subscription)</name>
   <vendor>rudami</vendor>
 
   <description><![CDATA[
-    Adds a <b>Claude Subscription</b> agent to JetBrains AI chat that authenticates with a
+    Adds a <b>Claude Code (Subscription)</b> agent to JetBrains AI chat that authenticates with a
     Claude.ai Pro/Max subscription, and keeps the underlying ACP adapter up to date from
     inside the IDE.<br/><br/>
 
@@ -26,12 +26,12 @@
 
   <extensions defaultExtensionNs="com.intellij">
     <postStartupActivity implementation="dev.rudami.claudeacp.ClaudeAgentProvisioner"/>
-    <notificationGroup id="Claude Subscription ACP" displayType="BALLOON"/>
+    <notificationGroup id="Claude Code ACP Bridge" displayType="BALLOON"/>
     <applicationConfigurable
         id="dev.rudami.claudeacp.settings"
         parentId="tools"
         instance="dev.rudami.claudeacp.ClaudeAcpConfigurable"
-        displayName="Claude Subscription Agent"/>
+        displayName="Claude Code ACP Bridge"/>
   </extensions>
 
   <!-- Internal AI Assistant extension point; see ClaudeAgentIconService for why

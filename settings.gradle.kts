@@ -5,4 +5,4 @@ pluginManagement {
     }
 }
 
-rootProject.name = "jetbrains-claude-subscription"
+rootProject.name = "claude-code-acp-bridge"

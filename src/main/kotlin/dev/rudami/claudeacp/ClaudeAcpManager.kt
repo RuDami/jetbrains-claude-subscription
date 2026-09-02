@@ -101,6 +101,8 @@ class ClaudeAcpManager(private val scope: CoroutineScope) {
             ?: latestVersion().getOrNull()
 
     private fun writeAgentEntry(command: String, runtime: NodeRuntime, version: String): Result<Unit> {
+        dropRenamedEntries()
+
         val entry = JsonObject().apply {
             addProperty("command", command)
             add("args", JsonArray())
@@ -122,7 +124,7 @@ class ClaudeAcpManager(private val scope: CoroutineScope) {
                 LOG.info("Registered Claude ACP agent $version in ${AcpConfigFile.path} using ${runtime.node}")
                 notify(
                     NotificationType.INFORMATION,
-                    "Claude Subscription agent ready",
+                    "Claude Code (Subscription) agent ready",
                     "Added \"${settings.displayName}\" (adapter $version) to the AI chat agent list. " +
                         "Pick it there and log in with your Claude subscription.",
                 )
@@ -133,13 +135,31 @@ class ClaudeAcpManager(private val scope: CoroutineScope) {
                 LOG.warn("Refusing to rewrite unparseable ${AcpConfigFile.path}")
                 notify(
                     NotificationType.ERROR,
-                    "Could not register the Claude Subscription agent",
+                    "Could not register the Claude Code agent",
                     "${AcpConfigFile.path} is not valid JSON. It was left untouched so nothing else " +
                         "in it is lost — fix or delete the file, then restart.",
                 )
                 Result.failure(IllegalStateException("acp.json is unparseable"))
             }
         }
+    }
+
+    /**
+     * Removes entries this plugin wrote under a name it no longer uses.
+     *
+     * The IDE keys agents by display name, so renaming one — in settings, or because the
+     * default changed between plugin versions — otherwise leaves the old key behind and the
+     * picker lists the agent twice, both pointing at the same launcher. Only entries whose
+     * command is inside our adapter directory are touched, so an agent someone else defined
+     * under the old name survives.
+     */
+    private fun dropRenamedEntries() {
+        AcpConfigFile.agentsCommandedFrom(installer.root)
+            .filter { it != settings.displayName }
+            .forEach { stale ->
+                LOG.info("Removing agent entry '$stale' left behind by a rename")
+                AcpConfigFile.removeAgent(stale)
+            }
     }
 
     fun removeAgentEntry() {
@@ -212,7 +232,7 @@ class ClaudeAcpManager(private val scope: CoroutineScope) {
             .getNotificationGroup(NOTIFICATION_GROUP)
             .createNotification(
                 "Claude ACP adapter $latest is available",
-                from + "Updating replaces the adapter the Claude Subscription agent runs.",
+                from + "Updating replaces the adapter the Claude Code (Subscription) agent runs.",
                 NotificationType.INFORMATION,
             )
             .addAction(NotificationAction.createSimpleExpiring("Update now") { updateTo(latest, null) })
@@ -289,9 +309,9 @@ class ClaudeAcpManager(private val scope: CoroutineScope) {
         notify(
             NotificationType.WARNING,
             "No usable Node.js runtime found",
-            "The Claude Subscription agent needs Node.js ${NodeRuntimeResolver.MINIMUM_MAJOR} or newer. " +
+            "The Claude Code (Subscription) agent needs Node.js ${NodeRuntimeResolver.MINIMUM_MAJOR} or newer. " +
                 "Install one, or run a bundled ACP agent once so the IDE downloads its own runtime, " +
-                "then restart. You can also set an explicit path in Settings | Tools | Claude Subscription Agent.",
+                "then restart. You can also set an explicit path in Settings | Tools | Claude Code ACP Bridge.",
         )
     }
 
@@ -303,7 +323,7 @@ class ClaudeAcpManager(private val scope: CoroutineScope) {
     }
 
     companion object {
-        const val NOTIFICATION_GROUP: String = "Claude Subscription ACP"
+        const val NOTIFICATION_GROUP: String = "Claude Code ACP Bridge"
 
         private const val HTTP_TIMEOUT_MS = 10_000
         private val STARTUP_GRACE = 2.minutes

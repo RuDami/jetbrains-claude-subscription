@@ -68,7 +68,7 @@ class ClaudeAcpSettings : SimplePersistentStateComponent<ClaudeAcpSettings.State
     val pinnedVersion: String? get() = state.pinnedVersion?.takeIf { it.isNotBlank() }
 
     companion object {
-        const val DEFAULT_DISPLAY_NAME: String = "Claude Subscription"
+        const val DEFAULT_DISPLAY_NAME: String = "Claude Code (Subscription)"
         const val PACKAGE_NAME: String = "@agentclientprotocol/claude-agent-acp"
 
         fun getInstance(): ClaudeAcpSettings = service()
@@ -80,8 +80,8 @@ object ClaudeAgent {
     /**
      * Whether [agentId] is the agent this plugin provisions.
      *
-     * The IDE derives the id from the display name — "Claude Subscription" was observed
-     * to become `acp.claude-subscription`. The exact slug rule is not documented, so the
+     * The IDE derives the id from the display name — "Claude Subscription" was observed to
+     * become `acp.claude-subscription`. The exact slug rule is not documented, so the
      * comparison strips the `acp.` prefix and every separator on both sides instead of
      * reimplementing a guess at it.
      */

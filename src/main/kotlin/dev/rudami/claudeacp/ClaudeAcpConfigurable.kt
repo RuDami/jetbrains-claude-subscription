@@ -14,7 +14,7 @@ import javax.swing.JSpinner
 import javax.swing.SpinnerNumberModel
 
 /**
- * Settings | Tools | Claude Subscription Agent.
+ * Settings | Tools | Claude Code ACP Bridge.
  *
  * Plain components rather than the UI DSL's `bind*` helpers: applying a change here has to
  * rewrite `acp.json` as a side effect, so the apply step is explicit anyway, and hand-held
@@ -37,7 +37,7 @@ class ClaudeAcpConfigurable : Configurable {
     private val ideaMcpCheckBox = JBCheckBox("Expose the IDE's MCP server to the agent")
     private val customMcpCheckBox = JBCheckBox("Expose your own MCP servers to the agent")
 
-    override fun getDisplayName(): String = "Claude Subscription Agent"
+    override fun getDisplayName(): String = "Claude Code ACP Bridge"
 
     override fun createComponent(): JComponent {
         manageCheckBox.addActionListener { syncEnabled() }

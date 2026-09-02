@@ -57,6 +57,26 @@ object AcpConfigFile {
         return Outcome.WRITTEN
     }
 
+    /**
+     * Names of agents whose `command` lives under [commandRoot] — that is, entries this
+     * plugin wrote at some point.
+     *
+     * Used to clean up after a rename: the IDE keys an agent by its display name, so
+     * changing the name leaves the old entry behind pointing at the same launcher, and the
+     * picker shows the agent twice. Matching on the command path rather than on a
+     * remembered name also catches entries written by a version that predates the setting.
+     */
+    @Synchronized
+    fun agentsCommandedFrom(commandRoot: Path): List<String> {
+        val servers = read()?.getAsJsonObject(AGENT_SERVERS) ?: return emptyList()
+        val prefix = commandRoot.toString()
+
+        return servers.keySet().filter { name ->
+            val command = servers.getAsJsonObject(name)?.get("command")?.asString
+            command != null && command.startsWith(prefix)
+        }
+    }
+
     /** Drops our entry, leaving the rest of the file alone. */
     @Synchronized
     fun removeAgent(name: String): Outcome {
