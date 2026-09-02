@@ -1,9 +1,6 @@
-.gradle/
+node_modules/
 build/
-out/
+.gradle/
 .intellijPlatform/
 .kotlin/
-.idea/
-*.iml
-local.properties
-.claude
+.DS_Store

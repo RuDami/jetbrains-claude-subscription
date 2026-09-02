@@ -1,0 +1,39 @@
+#!/bin/sh
+# ACP-коннектор для JetBrains AI Assistant, работающий на подписке Claude Pro/Max.
+#
+# JetBrains запускает штатный "Claude Agent" из реестра с флагом --hide-claude-auth,
+# который прячет вход по подписке и роняет сессию с "This integration does not
+# support using claude.ai subscriptions". Здесь тот же адаптер стартует без него.
+#
+# Ключи API вычищаются из окружения: при выставленном ANTHROPIC_API_KEY/AUTH_TOKEN
+# Claude Code уходит на биллинг по API вместо подписки.
+
+unset ANTHROPIC_API_KEY
+unset ANTHROPIC_AUTH_TOKEN
+unset ANTHROPIC_API_KEY_HELPER
+unset CLAUDE_CODE_USE_BEDROCK
+unset CLAUDE_CODE_USE_VERTEX
+
+DIR=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+
+# IDE, запущенная из Dock, наследует урезанный PATH без nvm/homebrew.
+if [ -z "$NODE_BIN" ]; then
+  for candidate in \
+    "$(command -v node 2>/dev/null)" \
+    "$HOME/.nvm/versions/node/v24.15.0/bin/node" \
+    /opt/homebrew/bin/node \
+    /usr/local/bin/node
+  do
+    [ -x "$candidate" ] && NODE_BIN="$candidate" && break
+  done
+fi
+
+if [ -z "$NODE_BIN" ]; then
+  echo "claude-acp-sub: node not found; set NODE_BIN in acp.json env" >&2
+  exit 127
+fi
+
+PATH="$(dirname -- "$NODE_BIN"):$PATH"
+export PATH
+
+exec "$NODE_BIN" "$DIR/node_modules/@agentclientprotocol/claude-agent-acp/dist/index.js" "$@"

@@ -1,0 +1,315 @@
+package dev.rudami.claudeacp
+
+import com.google.gson.JsonArray
+import com.google.gson.JsonObject
+import com.google.gson.JsonParser
+import com.intellij.notification.NotificationAction
+import com.intellij.notification.NotificationGroupManager
+import com.intellij.notification.NotificationType
+import com.intellij.openapi.components.Service
+import com.intellij.openapi.components.service
+import com.intellij.openapi.diagnostic.logger
+import com.intellij.openapi.progress.ProgressIndicator
+import com.intellij.openapi.progress.ProgressManager
+import com.intellij.openapi.progress.Task
+import com.intellij.openapi.project.Project
+import com.intellij.util.io.HttpRequests
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import java.net.URLEncoder
+import java.nio.charset.StandardCharsets
+import kotlin.time.Duration.Companion.hours
+import kotlin.time.Duration.Companion.minutes
+
+/**
+ * Everything the plugin actually does: install the adapter, keep `acp.json` pointing at
+ * it, and watch the npm registry for newer versions.
+ */
+@Service(Service.Level.APP)
+class ClaudeAcpManager(private val scope: CoroutineScope) {
+
+    private val settings get() = ClaudeAcpSettings.getInstance()
+    private val installer get() = AdapterInstaller.getInstance()
+
+    private var updateLoop: Job? = null
+
+    /** Human-readable state for the settings page. */
+    data class Status(val installedVersion: String?, val nodePath: String?, val agentRegistered: Boolean)
+
+    fun status(): Status {
+        val installed = settings.state.installedVersion?.takeIf { installer.isInstalled(it) }
+        return Status(
+            installedVersion = installed,
+            nodePath = NodeRuntimeResolver.resolve()?.node?.toString(),
+            agentRegistered = installed != null,
+        )
+    }
+
+    // ---------------------------------------------------------------- provisioning
+
+    /**
+     * Brings the on-disk state in line with the settings: a usable adapter installed, a
+     * launcher pointing at it, and our entry in `acp.json`.
+     *
+     * Safe to call repeatedly — [AcpConfigFile.upsertAgent] rewrites nothing when the entry
+     * already matches, which matters because this runs on every IDE start.
+     */
+    fun provision(indicator: ProgressIndicator? = null): Result<Unit> {
+        if (!settings.state.manageAgent) {
+            LOG.info("Agent management disabled in settings; leaving ${AcpConfigFile.path} alone")
+            return Result.success(Unit)
+        }
+
+        val runtime = NodeRuntimeResolver.resolve()
+        if (runtime == null) {
+            notifyNoNode()
+            return Result.failure(IllegalStateException("no node runtime"))
+        }
+
+        val version = resolveTargetVersion() ?: return Result.failure(
+            IllegalStateException("no adapter version installed and the registry is unreachable"),
+        )
+
+        val entryPoint = installer.entryPoint(version)
+            ?: installer.install(version, runtime, indicator).getOrElse { failure ->
+                notify(
+                    NotificationType.ERROR,
+                    "Could not install the Claude ACP adapter",
+                    failure.message ?: "npm install failed.",
+                )
+                return Result.failure(failure)
+            }
+
+        settings.state.installedVersion = version
+        installer.pruneOldVersions()
+
+        val launcher = LauncherScript.write(installer.root, runtime, entryPoint)
+        return writeAgentEntry(launcher.toString(), runtime, version)
+    }
+
+    /**
+     * Which version we should be running: an explicit pin wins, then whatever is already
+     * installed, and only a first run reaches out to the registry.
+     */
+    private fun resolveTargetVersion(): String? =
+        settings.pinnedVersion
+            ?: settings.state.installedVersion?.takeIf { installer.isInstalled(it) }
+            ?: installer.installedVersions().firstOrNull()
+            ?: latestVersion().getOrNull()
+
+    private fun writeAgentEntry(command: String, runtime: NodeRuntime, version: String): Result<Unit> {
+        val entry = JsonObject().apply {
+            addProperty("command", command)
+            add("args", JsonArray())
+            add(
+                "env",
+                JsonObject().apply { addProperty("PATH", installer.pathWith(runtime)) },
+            )
+            addProperty("use_idea_mcp", settings.state.useIdeaMcp)
+            addProperty("use_custom_mcp", settings.state.useCustomMcp)
+        }
+
+        return when (AcpConfigFile.upsertAgent(settings.displayName, entry)) {
+            AcpConfigFile.Outcome.UNCHANGED -> {
+                LOG.info("Claude ACP agent already current in ${AcpConfigFile.path}")
+                Result.success(Unit)
+            }
+
+            AcpConfigFile.Outcome.WRITTEN -> {
+                LOG.info("Registered Claude ACP agent $version in ${AcpConfigFile.path} using ${runtime.node}")
+                notify(
+                    NotificationType.INFORMATION,
+                    "Claude Subscription agent ready",
+                    "Added \"${settings.displayName}\" (adapter $version) to the AI chat agent list. " +
+                        "Pick it there and log in with your Claude subscription.",
+                )
+                Result.success(Unit)
+            }
+
+            AcpConfigFile.Outcome.REFUSED_UNPARSEABLE -> {
+                LOG.warn("Refusing to rewrite unparseable ${AcpConfigFile.path}")
+                notify(
+                    NotificationType.ERROR,
+                    "Could not register the Claude Subscription agent",
+                    "${AcpConfigFile.path} is not valid JSON. It was left untouched so nothing else " +
+                        "in it is lost — fix or delete the file, then restart.",
+                )
+                Result.failure(IllegalStateException("acp.json is unparseable"))
+            }
+        }
+    }
+
+    fun removeAgentEntry() {
+        AcpConfigFile.removeAgent(settings.displayName)
+    }
+
+    // ---------------------------------------------------------------- updates
+
+    /**
+     * Reads `latest` off the registry.
+     *
+     * The `dist-tags` endpoint returns `{"latest":"0.73.0"}` and nothing else — the full
+     * packument for this package is several hundred KB, which is a lot to pull once a day
+     * for one string. [HttpRequests] is used rather than a raw HTTP client because it
+     * honours the IDE's proxy settings.
+     */
+    fun latestVersion(): Result<String> = runCatching {
+        val encoded = URLEncoder.encode(ClaudeAcpSettings.PACKAGE_NAME, StandardCharsets.UTF_8)
+        val body = HttpRequests.request("https://registry.npmjs.org/-/package/$encoded/dist-tags")
+            .connectTimeout(HTTP_TIMEOUT_MS)
+            .readTimeout(HTTP_TIMEOUT_MS)
+            .readString()
+
+        JsonParser.parseString(body).asJsonObject.get("latest")?.asString
+            ?: error("registry response has no 'latest' tag")
+    }.onFailure { LOG.info("Update check failed: ${it.message}") }
+
+    /**
+     * @param manual true when the user pressed the button, which means silence is not an
+     *   acceptable answer — "already up to date" and failures are reported too.
+     */
+    fun checkForUpdates(manual: Boolean) {
+        if (!manual && settings.state.updatePolicy == UpdatePolicy.OFF) return
+
+        if (settings.pinnedVersion != null && !manual) {
+            LOG.info("Adapter pinned to ${settings.pinnedVersion}; skipping update check")
+            return
+        }
+
+        val latest = latestVersion().getOrElse { failure ->
+            if (manual) {
+                notify(
+                    NotificationType.WARNING,
+                    "Could not reach the npm registry",
+                    failure.message ?: "Unknown error.",
+                )
+            }
+            return
+        }
+
+        val installed = settings.state.installedVersion
+        if (installed != null && VersionOrder.compare(latest, installed) <= 0) {
+            if (manual) {
+                notify(NotificationType.INFORMATION, "Claude ACP adapter is up to date", "Version $installed.")
+            }
+            return
+        }
+
+        if (!manual && latest == settings.state.skippedVersion) return
+
+        when {
+            settings.state.updatePolicy == UpdatePolicy.AUTO && !manual -> updateTo(latest, null)
+            else -> notifyUpdateAvailable(latest, installed)
+        }
+    }
+
+    private fun notifyUpdateAvailable(latest: String, installed: String?) {
+        val from = installed?.let { "You have $it. " }.orEmpty()
+        NotificationGroupManager.getInstance()
+            .getNotificationGroup(NOTIFICATION_GROUP)
+            .createNotification(
+                "Claude ACP adapter $latest is available",
+                from + "Updating replaces the adapter the Claude Subscription agent runs.",
+                NotificationType.INFORMATION,
+            )
+            .addAction(NotificationAction.createSimpleExpiring("Update now") { updateTo(latest, null) })
+            .addAction(
+                NotificationAction.createSimpleExpiring("Skip $latest") {
+                    settings.state.skippedVersion = latest
+                },
+            )
+            .notify(null)
+    }
+
+    /** Installs [version], repoints the launcher at it and refreshes `acp.json`. */
+    fun updateTo(version: String, project: Project?, onFinished: (Result<Unit>) -> Unit = {}) {
+        ProgressManager.getInstance().run(
+            object : Task.Backgroundable(project, "Installing Claude ACP adapter $version", true) {
+                override fun run(indicator: ProgressIndicator) {
+                    val runtime = NodeRuntimeResolver.resolve()
+                    if (runtime == null) {
+                        notifyNoNode()
+                        onFinished(Result.failure(IllegalStateException("no node runtime")))
+                        return
+                    }
+
+                    val installed = installer.install(version, runtime, indicator)
+                    installed.onFailure { failure ->
+                        notify(
+                            NotificationType.ERROR,
+                            "Could not install adapter $version",
+                            failure.message ?: "npm install failed.",
+                        )
+                        onFinished(Result.failure(failure))
+                    }
+
+                    val entryPoint = installed.getOrNull() ?: return
+
+                    settings.state.installedVersion = version
+                    settings.state.skippedVersion = null
+                    installer.pruneOldVersions()
+
+                    val launcher = LauncherScript.write(installer.root, runtime, entryPoint)
+                    val result = writeAgentEntry(launcher.toString(), runtime, version)
+
+                    if (result.isSuccess) {
+                        notify(
+                            NotificationType.INFORMATION,
+                            "Claude ACP adapter updated to $version",
+                            "Open a new AI chat to use it — a chat that is already running keeps " +
+                                "the adapter process it started with.",
+                        )
+                    }
+                    onFinished(result)
+                }
+            },
+        )
+    }
+
+    /** Starts the periodic check. Idempotent: a second call does not add a second loop. */
+    @Synchronized
+    fun startUpdateLoop() {
+        if (updateLoop?.isActive == true) return
+
+        updateLoop = scope.launch {
+            delay(STARTUP_GRACE)
+            while (isActive) {
+                runCatching { checkForUpdates(manual = false) }
+                    .onFailure { LOG.warn("Periodic update check failed", it) }
+                delay(settings.state.checkIntervalHours.coerceAtLeast(1).hours)
+            }
+        }
+    }
+
+    private fun notifyNoNode() {
+        LOG.warn("No node runtime found; cannot provision the Claude ACP agent")
+        notify(
+            NotificationType.WARNING,
+            "No usable Node.js runtime found",
+            "The Claude Subscription agent needs Node.js ${NodeRuntimeResolver.MINIMUM_MAJOR} or newer. " +
+                "Install one, or run a bundled ACP agent once so the IDE downloads its own runtime, " +
+                "then restart. You can also set an explicit path in Settings | Tools | Claude Subscription Agent.",
+        )
+    }
+
+    private fun notify(type: NotificationType, title: String, content: String) {
+        NotificationGroupManager.getInstance()
+            .getNotificationGroup(NOTIFICATION_GROUP)
+            .createNotification(title, content, type)
+            .notify(null)
+    }
+
+    companion object {
+        const val NOTIFICATION_GROUP: String = "Claude Subscription ACP"
+
+        private const val HTTP_TIMEOUT_MS = 10_000
+        private val STARTUP_GRACE = 2.minutes
+
+        private val LOG = logger<ClaudeAcpManager>()
+
+        fun getInstance(): ClaudeAcpManager = service()
+    }
+}

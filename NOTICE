@@ -1,0 +1,15 @@
+This plugin is derived from
+  https://github.com/vanssata/jetbrains-claude-subscription
+Copyright (c) vanssa, MIT License (see LICENSE).
+
+Reused with modifications:
+  src/main/kotlin/dev/rudami/claudeacp/AcpConfigFile.kt
+  src/main/kotlin/dev/rudami/claudeacp/ClaudeAgentIconService.kt
+  src/main/resources/icons/claude.svg
+  build.gradle.kts (local-IDE + AI Assistant dependency setup)
+
+Added here: npm-based adapter installation with rollback, npm registry update checks,
+a settings page, an environment-sanitising launcher script, IDE-aware Node resolution,
+and removal of the agent entry on uninstall.
+
+Not affiliated with or endorsed by Anthropic or JetBrains.

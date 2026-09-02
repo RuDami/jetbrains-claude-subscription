@@ -30,7 +30,7 @@ object AcpConfigFile {
     val path: Path = Paths.get(System.getProperty("user.home"), ".jetbrains", "acp.json")
 
     /** Kept as the pristine pre-plugin state — written once and never overwritten. */
-    private val backupPath: Path = path.resolveSibling("acp.json.before-claude-subscription-plugin")
+    private val backupPath: Path = path.resolveSibling("acp.json.before-claude-acp-managed")
 
     enum class Outcome {
         /** The file already held exactly this entry. */
