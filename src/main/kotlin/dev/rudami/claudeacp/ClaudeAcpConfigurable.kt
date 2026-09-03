@@ -348,7 +348,7 @@ class ClaudeAcpConfigurable : Configurable {
             // A chat left open keeps running an older adapter, and that copy is not spare.
             val busy = installer.versionsInUse()
             val removable = installer.installedVersions()
-                .filter { it != active && it !in busy }
+                .filter { it != active }
                 .map { AdapterCleanupDialog.VersionEntry(it, installer.diskUsage(it)) }
 
             invokeLater {
@@ -365,8 +365,9 @@ class ClaudeAcpConfigurable : Configurable {
                 if (!dialog.showAndGet()) return@invokeLater
 
                 val chosen = dialog.selected
+                val force = dialog.forced
                 inBackground("Deleting Claude ACP adapters") {
-                    val removed = manager.removeVersions(chosen)
+                    val removed = manager.removeVersions(chosen, force)
                     reloadVersions(refresh = false)
                     invokeLater {
                         Messages.showInfoMessage(

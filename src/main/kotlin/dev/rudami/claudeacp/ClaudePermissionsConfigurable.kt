@@ -48,10 +48,13 @@ class ClaudePermissionsConfigurable(private val project: Project) : Configurable
     /** Reloaded whenever the scope changes, so the fields always show the chosen file. */
     private var loaded: ClaudeSettingsFile.Permissions = ClaudeSettingsFile.Permissions()
 
+    /** Which file the fields currently belong to; see [onScopeChanged]. */
+    private var previousScope: ClaudeSettingsFile.Scope = ClaudeSettingsFile.Scope.SHARED
+
     override fun getDisplayName(): String = "Claude Code Permissions"
 
     override fun createComponent(): JComponent {
-        scopeCombo.addActionListener { loadFromDisk() }
+        scopeCombo.addActionListener { onScopeChanged() }
         modeCombo.addActionListener { syncRulesEnabled() }
 
         return panel {
@@ -115,40 +118,70 @@ class ClaudePermissionsConfigurable(private val project: Project) : Configurable
     // ---------------------------------------------------------------- Configurable
 
     override fun reset() {
-        scopeCombo.selectedItem = ClaudeSettingsFile.Scope.SHARED
+        previousScope = ClaudeSettingsFile.Scope.SHARED
+        scopeCombo.selectedItem = previousScope
         loadFromDisk()
     }
 
     override fun isModified(): Boolean = currentPermissions() != loaded
 
     override fun apply() {
-        val file = settingsFile()
+        if (writeTo(settingsFile())) {
+            // Re-read rather than trusting the edit: the merge may have kept rules that
+            // arrived from the chat, and the fields should show what the file now holds.
+            loadFromDisk()
+        }
+    }
+
+    /** @return false when the file could not be parsed, in which case nothing was written. */
+    private fun writeTo(file: ClaudeSettingsFile): Boolean {
         // `loaded` is the baseline, so rules the chat approved while this page was open are
         // merged rather than overwritten.
-        val written = file.write(loaded, currentPermissions())
+        if (file.write(loaded, currentPermissions())) return true
 
-        if (!written) {
-            Messages.showErrorDialog(
-                "The settings file could not be parsed, so nothing was written. Fix or delete " +
-                    "it and try again.",
-                "Claude Code Permissions",
-            )
-            return
-        }
-
-        // Re-read rather than trusting the edit: the merge may have kept rules that arrived
-        // from the chat, and the fields should show what the file now holds.
-        loadFromDisk()
+        Messages.showErrorDialog(
+            "The settings file could not be parsed, so nothing was written. Fix or delete it " +
+                "and try again.",
+            "Claude Code Permissions",
+        )
+        return false
     }
 
     // ---------------------------------------------------------------- state
 
-    private fun projectDir(): Path? = project.basePath?.let(Paths::get)
+    private fun baseDirectory(): Path =
+        project.basePath?.let(Paths::get) ?: Paths.get(System.getProperty("user.home"))
 
     private fun settingsFile(): ClaudeSettingsFile {
         val scope = scopeCombo.selectedItem as ClaudeSettingsFile.Scope
-        val base = projectDir() ?: Paths.get(System.getProperty("user.home"))
-        return ClaudeSettingsFile(scope.fileIn(base))
+        return ClaudeSettingsFile(scope.fileIn(baseDirectory()))
+    }
+
+    /**
+     * Switching scope loads a different file, which would silently discard whatever was
+     * typed for the previous one — and because the baseline reloads with it, the dialog
+     * would then think nothing had changed and close without saving. The user is asked
+     * instead, and can send the edits to the file they were made for.
+     */
+    private fun onScopeChanged() {
+        if (currentPermissions() != loaded) {
+            val answer = Messages.showYesNoCancelDialog(
+                "Save the changes to " + previousScope.label.lowercase() + " before switching?",
+                "Claude Code Permissions",
+                Messages.getQuestionIcon(),
+            )
+            when (answer) {
+                Messages.CANCEL -> {
+                    scopeCombo.selectedItem = previousScope
+                    return
+                }
+
+                Messages.YES -> writeTo(ClaudeSettingsFile(previousScope.fileIn(baseDirectory())))
+            }
+        }
+
+        previousScope = scopeCombo.selectedItem as ClaudeSettingsFile.Scope
+        loadFromDisk()
     }
 
     private fun loadFromDisk() {

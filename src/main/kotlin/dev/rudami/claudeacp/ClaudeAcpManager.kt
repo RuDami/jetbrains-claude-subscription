@@ -93,11 +93,15 @@ class ClaudeAcpManager(private val scope: CoroutineScope) {
                 return Result.failure(failure)
             }
 
+        // Order matters. Pruning first would delete the old version while the launcher still
+        // points at it, and recording the new version before the launcher is rewritten would
+        // leave the settings claiming a version the agent is not actually running.
+        val launcher = LauncherScript.write(installer.root, runtime, entryPoint)
+        val result = writeAgentEntry(launcher.toString(), version)
+
         settings.state.installedVersion = version
         installer.pruneOldVersions(active = version)
-
-        val launcher = LauncherScript.write(installer.root, runtime, entryPoint)
-        return writeAgentEntry(launcher.toString(), version)
+        return result
     }
 
     /**
@@ -362,6 +366,14 @@ class ClaudeAcpManager(private val scope: CoroutineScope) {
 
                     val entryPoint = installed.getOrNull() ?: return
 
+                    // Point the launcher at the new build and publish the entry before
+                    // recording anything: settings that claim a version the agent is not
+                    // running are worse than settings that lag by a moment. Pruning comes
+                    // last for the same reason — doing it first deletes the old version
+                    // while the launcher still points at it.
+                    val launcher = LauncherScript.write(installer.root, runtime, entryPoint)
+                    val result = writeAgentEntry(launcher.toString(), version)
+
                     settings.state.installedVersion = version
 
                     // Activating an older build is a rollback: clearing `skippedVersion`
@@ -372,9 +384,6 @@ class ClaudeAcpManager(private val scope: CoroutineScope) {
                     settings.state.skippedVersion = newerOnDisk
 
                     installer.pruneOldVersions(active = version)
-
-                    val launcher = LauncherScript.write(installer.root, runtime, entryPoint)
-                    val result = writeAgentEntry(launcher.toString(), version)
 
                     if (result.isSuccess) {
                         notify(
@@ -411,8 +420,13 @@ class ClaudeAcpManager(private val scope: CoroutineScope) {
      * to remember it, and forgetting leaves either the launcher pointing at nothing or an
      * open chat without the binary it is about to need.
      */
-    fun removeVersions(versions: List<String>): List<String> {
-        val spared = setOfNotNull(status().installedVersion) + installer.versionsInUse()
+    fun removeVersions(versions: List<String>, force: Boolean = false): List<String> {
+        // The active version is never negotiable: deleting it leaves the launcher pointing
+        // at nothing. A version merely held by an open chat is the user's call, since the
+        // alternative is having no way to reclaim that space short of closing the chat.
+        val spared = setOfNotNull(status().installedVersion) +
+            if (force) emptySet() else installer.versionsInUse()
+
         return versions.filter { it !in spared }
             .onEach { installer.removeVersion(it) }
             .onEach { LOG.info("Removed adapter version $it") }
