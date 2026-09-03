@@ -6,7 +6,7 @@ plugins {
 }
 
 group = "dev.rudami"
-version = "0.2.0"
+version = "0.2.1"
 
 repositories {
     mavenCentral()
@@ -86,6 +86,16 @@ intellijPlatform {
 
         changeNotes.set(
             """
+            <b>0.2.1</b>
+            <ul>
+              <li>Fixed the settings page hanging on "Loading adapter versions".</li>
+              <li>Adapters a running chat still uses are no longer deleted by automatic
+                  cleanup, and can be deleted deliberately.</li>
+              <li>Config files are written atomically, so the IDE and the adapter never read
+                  one half-written.</li>
+              <li>Permission rules approved in the chat are merged instead of overwritten.</li>
+            </ul>
+
             <b>0.2.0</b>
             <ul>
               <li>Pick any published adapter version from a list and switch to it; older

@@ -130,8 +130,10 @@ class AdapterInstaller {
      * new session, it is gone. So a version in use is not a candidate for deletion, whether
      * the deletion is automatic or asked for.
      *
-     * Best effort: `commandLine()` is unavailable for other users' processes and commonly
-     * empty on Windows, so this can under-report and never over-reports.
+     * Two sources, unioned. Command lines are exact where readable but are unavailable for
+     * other users' processes and commonly empty on Windows; the launcher's own markers cover
+     * that gap. Both under-report rather than over-report, which is the safe direction: a
+     * missed version can be deleted, a wrongly reported one merely survives.
      */
     fun versionsInUse(): Set<String> = fromCommandLines() + fromMarkers()
 
@@ -164,13 +166,15 @@ class AdapterInstaller {
             versionDir(version).listDirectoryEntries("${LauncherScript.MARKER_PREFIX}*")
         }.getOrElse { emptyList() }
 
-        markers.any { marker ->
+        // Partitioned rather than `any { ... }`: that short-circuits on the first live marker
+        // and leaves every dead one behind it unswept.
+        val (alive, stale) = markers.partition { marker ->
             val pid = marker.name.removePrefix(LauncherScript.MARKER_PREFIX).toLongOrNull()
-            val alive = pid != null && ProcessHandle.of(pid).isPresent
-
-            if (!alive) runCatching { Files.deleteIfExists(marker) }
-            alive
+            pid != null && ProcessHandle.of(pid).isPresent
         }
+
+        stale.forEach { runCatching { Files.deleteIfExists(it) } }
+        alive.isNotEmpty()
     }
 
     /**
@@ -250,7 +254,7 @@ class AdapterInstaller {
     }
 
     /** `PATH` an npm or adapter child process needs to find its own node. */
-    fun pathWith(runtime: NodeRuntime): String {
+    private fun pathWith(runtime: NodeRuntime): String {
         val inherited = com.intellij.util.EnvironmentUtil.getEnvironmentMap()["PATH"]
             ?: System.getenv("PATH")
             ?: ""

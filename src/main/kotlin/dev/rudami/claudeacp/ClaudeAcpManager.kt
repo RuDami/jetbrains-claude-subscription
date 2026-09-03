@@ -43,18 +43,21 @@ class ClaudeAcpManager(private val scope: CoroutineScope) {
     @Volatile
     private var cachedVersions: List<String>? = null
 
+    /** Which registry [cachedVersions] came from; see [availableVersions]. */
+    @Volatile
+    private var cachedRegistry: String? = null
+
     /** Versions with an install running, so a repeated request is not honoured twice. */
     private val installsInFlight = ConcurrentHashMap.newKeySet<String>()
 
     /** Human-readable state for the settings page. */
-    data class Status(val installedVersion: String?, val nodePath: String?, val agentRegistered: Boolean)
+    data class Status(val installedVersion: String?, val nodePath: String?)
 
     fun status(): Status {
         val installed = settings.state.installedVersion?.takeIf { installer.isInstalled(it) }
         return Status(
             installedVersion = installed,
             nodePath = NodeRuntimeResolver.resolve()?.node?.toString(),
-            agentRegistered = installed != null,
         )
     }
 
@@ -240,8 +243,18 @@ class ClaudeAcpManager(private val scope: CoroutineScope) {
      * manifest and runs to hundreds of kilobytes.
      */
     fun availableVersions(refresh: Boolean = false): Result<List<String>> {
-        if (!refresh) cachedVersions?.let { return Result.success(it) }
-        return fetchVersions().onSuccess { cachedVersions = it }
+        // Keyed by registry: the cached list belongs to the registry it came from, and
+        // pointing the plugin at a mirror used to leave the old registry's versions on
+        // screen until the IDE restarted.
+        val registry = settings.registry
+        if (!refresh && cachedRegistry == registry) {
+            cachedVersions?.let { return Result.success(it) }
+        }
+
+        return fetchVersions().onSuccess {
+            cachedVersions = it
+            cachedRegistry = registry
+        }
     }
 
     private fun fetchVersions(): Result<List<String>> = runCatching {
@@ -287,7 +300,10 @@ class ClaudeAcpManager(private val scope: CoroutineScope) {
             return
         }
 
-        val installed = settings.state.installedVersion
+        // The verified version, not the recorded one: settings can name a build whose files
+        // were deleted, and answering "up to date" for something that is not on disk sends
+        // the user looking for a problem elsewhere.
+        val installed = status().installedVersion
         if (installed != null && VersionOrder.compare(latest, installed) <= 0) {
             if (manual) {
                 notify(NotificationType.INFORMATION, "Claude ACP adapter is up to date", "Version $installed.")
@@ -433,9 +449,10 @@ class ClaudeAcpManager(private val scope: CoroutineScope) {
         val spared = setOfNotNull(status().installedVersion) +
             if (force) emptySet() else installer.versionsInUse()
 
-        return versions.filter { it !in spared }
-            .onEach { installer.removeVersion(it) }
-            .onEach { LOG.info("Removed adapter version $it") }
+        return versions.filter { it !in spared }.onEach {
+            installer.removeVersion(it)
+            LOG.info("Removed adapter version $it")
+        }
     }
 
     /** Starts the periodic check. Idempotent: a second call does not add a second loop. */
