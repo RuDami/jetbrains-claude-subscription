@@ -1,117 +1,255 @@
-# Claude Code ACP Bridge (Subscription)
+# Claude Code ACP Bridge — use a Claude Pro/Max subscription in JetBrains IDEs
 
-> Форк [vanssata/jetbrains-claude-subscription](https://github.com/vanssata/jetbrains-claude-subscription)
-> (MIT). Оттуда взяты `AcpConfigFile`, extension point иконки и схема сборки против локальной
-> IDE; поимённый список — в [`NOTICE`](NOTICE). Добавлены установка адаптера через npm с
-> откатом, проверка обновлений в npm-реестре, страница настроек, лаунчер, вычищающий
-> ключи API из окружения, и резолв Node.js с учётом запущенной IDE.
->
-> Не affiliated с Anthropic или JetBrains.
+A JetBrains IDE plugin that adds a **Claude Code (Subscription)** agent to AI Chat and signs
+in with your **Claude Pro or Max subscription** instead of an Anthropic API key. It installs
+and updates the official ACP adapter for you.
 
-Плагин для JetBrains IDE (WebStorm 2026.2), который добавляет в AI Chat агента
-**Claude Code (Subscription)**, работающего на подписке Claude Pro/Max. Сам ставит официальный
-ACP-адаптер [`@agentclientprotocol/claude-agent-acp`](https://github.com/agentclientprotocol/claude-agent-acp)
-и обновляет его из IDE.
+Works in WebStorm, IntelliJ IDEA, PhpStorm, PyCharm, GoLand, RubyMine, CLion, Rider and
+DataGrip — any 2026.2+ JetBrains IDE with the AI Assistant plugin.
 
-## Зачем
+[Download the latest release](https://github.com/RuDami/jetbrains-claude-subscription/releases/latest)
+· [Why this exists](#why-this-plugin-exists) · [Install](#install) · [Troubleshooting](#troubleshooting)
 
-Штатный «Claude Agent» из ACP-реестра JetBrains запускается с флагом `--hide-claude-auth`.
-В `@agentclientprotocol/claude-agent-acp` этот флаг:
+> **Fork notice.** Derived from
+> [vanssata/jetbrains-claude-subscription](https://github.com/vanssata/jetbrains-claude-subscription)
+> (MIT); `AcpConfigFile`, the icon extension point and the local-IDE build setup come from
+> there — see [`NOTICE`](NOTICE) for the file-by-file list. Not affiliated with, endorsed by
+> or supported by Anthropic or JetBrains.
 
-1. убирает метод авторизации `claude-ai-login` («Claude Subscription») из `authMethods` —
-   остаются только Anthropic Console и gateway;
-2. в `newSession` роняет сессию, если у аккаунта есть `subscriptionType`:
-   `This integration does not support using claude.ai subscriptions.`
+## Table of contents
 
-Плагин запускает тот же официальный адаптер без этого флага. Ничего не патчится — пакет
-поддерживает подписку по умолчанию.
+- [The problem this solves](#the-problem-this-solves)
+- [Why this plugin exists](#why-this-plugin-exists)
+- [Requirements](#requirements)
+- [Install](#install)
+- [What it does](#what-it-does)
+- [Settings](#settings)
+- [Permissions](#permissions)
+- [Troubleshooting](#troubleshooting)
+- [FAQ](#faq)
+- [Build from source](#build-from-source)
+- [Verify it works](#verify-it-works)
+- [CLI fallback (Zed and other ACP clients)](#cli-fallback-zed-and-other-acp-clients)
+- [Credits and links](#credits-and-links)
 
-## Что делает
+## The problem this solves
 
-- ставит адаптер через `npm install` в `~/.jetbrains/claude-acp-adapter/versions/<version>/`;
-- генерирует `launch.sh`, который вычищает `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`,
-  `ANTHROPIC_API_KEY_HELPER` и Bedrock/Vertex-флаги — при выставленном ключе Claude Code
-  уходит на биллинг по API мимо подписки, а через `env` в `acp.json` переменную можно
-  только задать, не убрать;
-- дописывает запись агента в `~/.jetbrains/acp.json`, не трогая чужие записи и
-  `default_mcp_settings`, и отказывается писать, если файл — не валидный JSON;
-- раз в сутки спрашивает у npm-реестра `dist-tags` и предлагает обновиться;
-- держит на диске две последние версии, так что откат — это выбор старой версии в настройках.
+If you have a Claude Pro or Max subscription and try to use the Claude agent that ships in
+the JetBrains ACP Registry, sign-in fails with one of these:
 
-Обновление адаптера не требует перезапуска IDE: `acp.json` перечитывается на лету, а новая
-версия подхватывается в **новом** чате (уже открытый держит запущенный процесс).
+```
+This integration does not support using claude.ai subscriptions.
+```
 
-## Настройки
+```
+Authentication was reset. Please create a new chat for the change to take effect.
+```
 
-`Settings | Tools | Claude Code ACP Bridge`:
+The subscription login option may not appear at all — the agent offers only **Anthropic
+Console** (API billing) or JetBrains AI credits. This plugin restores the **Claude
+Subscription** login.
 
-- один список версий: все опубликованные в реестре плюс уже скачанные, с пометками
-  «active» и «downloaded». Выбрать и нажать OK — плагин поставит её и сделает активной;
-  выбор старой версии и есть откат;
-- сколько места занимают скачанные адаптеры;
-- политика обновлений (уведомлять / ставить молча / не проверять) и интервал проверки;
-- реестр: список известных зеркал, поле редактируемое — свой Nexus или Artifactory
-  вписывается руками;
-- MCP-флаги и выбор node: список найденных интерпретаторов плюс кнопка обзора файлов;
-- **Check for Updates** — спрашивает реестр, вышло ли что-то новее, и пишет ответ прямо
-  на странице;
-- **Repair** — перекачивает текущий адаптер, если его файлы пропали, и переписывает запись
-  агента. Это то, что нужно, когда агент перестал появляться в чате;
-- **Free Up Space** — диалог со списком скачанных версий и их размерами;
-- **Remove Agent** — убирает запись из `acp.json`, удаляет скачанные адаптеры и гасит всю
-  страницу; **Add Agent** возвращает всё обратно;
-- **Restore Defaults** — свежая версия, публичный реестр, автоматический выбор node.
+## Why this plugin exists
 
-## Установка
+The agent JetBrains ships in its ACP Registry launches
+[`@agentclientprotocol/claude-agent-acp`](https://github.com/agentclientprotocol/claude-agent-acp)
+with the flag `--hide-claude-auth`. In that package the flag does two things:
 
-Скачать zip из [Releases](https://github.com/RuDami/jetbrains-claude-subscription/releases),
-дальше `Settings | Plugins | ⚙ | Install Plugin from Disk` и перезапуск IDE. Агент
-**Claude Code (Subscription)** появится в списке AI Chat: Log in → **Claude Subscription**.
+1. removes the `claude-ai-login` ("Claude Subscription") method from `authMethods`, leaving
+   only Anthropic Console and gateway logins;
+2. in `newSession`, rejects any account that has a `subscriptionType`, which is the error
+   quoted above.
 
-Требуется JetBrains IDE 2026.2+ с установленным AI Assistant и Node.js 22+ — либо свой,
-либо тот, что IDE скачивает для собственных ACP-агентов.
+This plugin runs **the same official adapter without that flag**. Nothing is patched or
+forked: the package supports subscription login by default.
 
-## Сборка
+## Requirements
 
-Нужен JDK 21+ — годится JetBrains Runtime из самой IDE. Gradle wrapper в репозитории.
+| | |
+|---|---|
+| IDE | Any JetBrains IDE 2026.2 or newer |
+| Plugin | JetBrains AI Assistant (`com.intellij.ml.llm`) installed |
+| Runtime | Node.js 22+ — your own, or the one the IDE downloads for its own ACP agents |
+| Account | A Claude Free, Pro or Max subscription |
+
+No Anthropic API key is required, and none is used.
+
+## Install
+
+1. Download the plugin zip from
+   [Releases](https://github.com/RuDami/jetbrains-claude-subscription/releases/latest).
+2. In the IDE: **Settings → Plugins → ⚙ → Install Plugin from Disk…**, pick the zip.
+3. Restart the IDE. The plugin downloads the adapter on first start.
+4. Open AI Chat, pick the **Claude Code (Subscription)** agent.
+5. **Log in → Claude Subscription**, and complete the browser sign-in.
+
+If the upstream plugin or a hand-written agent entry is already registered, the plugin says
+so — two things maintaining the same entry rewrite each other on every start.
+
+## What it does
+
+- Installs the adapter with `npm` into `~/.jetbrains/claude-acp-adapter/versions/<version>/`,
+  rather than running `npx` on every agent start. Starting the agent needs no network, the
+  version is reproducible, and the previous build stays on disk for rollback.
+- Generates a launcher script that clears `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`,
+  `ANTHROPIC_API_KEY_HELPER` and the Bedrock/Vertex switches. This matters: with an API key
+  in the environment Claude Code bills the API instead of your subscription, and the `env`
+  block in `acp.json` can only *set* variables, never remove them.
+- Registers the agent in `~/.jetbrains/acp.json`, merging into the file rather than
+  rewriting it — other agents and your `default_mcp_settings` are left alone, and a file
+  that does not parse is refused rather than replaced.
+- Polls the npm registry once a day and offers new adapter releases.
+- Keeps the two most recent adapter versions on disk.
+
+Updating the adapter needs no IDE restart: the IDE re-reads `acp.json` on the fly, and a
+**new** chat picks up the new version — a chat already running keeps the process it started
+with.
+
+## Settings
+
+**Settings → Tools → Claude Code ACP Bridge**
+
+| Control | What it does |
+|---|---|
+| Version | Every release in the registry plus what is downloaded, marked *active* / *downloaded*. Pick one, press OK, and the plugin switches to it — an older build is a rollback. |
+| Downloaded | How much disk the adapters use. |
+| Check for Updates | Asks the registry for newer releases and answers on the page. |
+| Repair | Re-downloads the current adapter if its files went missing and rewrites the agent entry. Use it when the agent stops appearing in the chat. |
+| Free Up Space | Dialog listing downloaded versions with sizes; tick what to delete. The version in use is never offered. |
+| On a new release | Notify and install on click, install silently, or never check. |
+| Registry | Known mirrors, editable — a private Nexus or Artifactory can be typed in. |
+| MCP | Whether the agent sees the IDE's MCP server and your own MCP servers. |
+| Node.js | Interpreters found on this machine, or browse for one. |
+| Add / Remove Agent | Removes the entry from `acp.json`, deletes the downloaded adapters and disables the page. Add turns it all back on. |
+| Restore Defaults | Newest adapter, public registry, automatic interpreter. |
+
+## Permissions
+
+**Settings → Tools → Claude Code ACP Bridge → Permissions** edits the project's
+`.claude/settings.json`, which Claude Code reads and the adapter watches — changes reach a
+running agent immediately.
+
+- **Applies to** — settings shared with the team (`.claude/settings.json`) or kept to this
+  machine (`.claude/settings.local.json`).
+- **Default mode** — `default`, `plan`, `acceptEdits`, `auto`, `dontAsk` or
+  `bypassPermissions`. Claude Code ignores an escalating mode arriving from committed
+  settings, so set those under *Only me*.
+- **Always allow / Always ask / Never allow** — rules in Claude Code's own syntax, one per
+  line: `Bash(npm run test:*)`, `Read(./.env)`, or a bare tool name such as `Edit`. Deny
+  wins over allow.
+
+Rules you approve in the chat land in the same file. Applying merges rather than overwrites,
+so an "Always Allow" granted while the page was open is not lost.
+
+## Troubleshooting
+
+**"This integration does not support using claude.ai subscriptions."**
+You are on the bundled Claude agent from the ACP Registry, not this one. Pick **Claude Code
+(Subscription)** in the agent list.
+
+**"Authentication was reset. Please create a new chat for the change to take effect."**
+Same cause as above.
+
+**The agent is missing from the chat list.**
+Open the settings page and press **Repair**. If it reports no Node.js, install Node 22+ or
+select an interpreter explicitly.
+
+**"No usable Node.js runtime found."**
+The plugin searches your login shell's `PATH` and then the runtimes the IDE downloaded for
+its own ACP agents. Install Node 22+, or set the path in settings. An IDE started from the
+Dock or Finder inherits a minimal `PATH`, which is why the login shell is consulted.
+
+**Usage is billed to the API instead of the subscription.**
+Check for `ANTHROPIC_API_KEY` in your environment. The generated launcher clears it, so this
+should not happen — if it does, please open an issue.
+
+**The agent entry keeps changing between restarts.**
+Two things are managing it. Disable the other plugin, or remove its entry from `acp.json`.
+
+## FAQ
+
+**Does this need an Anthropic API key?** No. That is the point — it uses your Claude
+subscription.
+
+**Is Claude Code patched or reimplemented?** No. The official adapter is downloaded from npm
+and launched without one flag. All model, tool and authentication behaviour is that
+package's.
+
+**Is this allowed?** Anthropic's terms state that signing in to the unmodified Claude Code
+binary with your own Claude subscription is permitted; what is prohibited is a third party
+reselling or intermediating Claude usage. See
+[Claude Code legal and compliance](https://code.claude.com/docs/en/legal-and-compliance).
+Nothing here is modified, and nobody sits between you and Anthropic.
+
+**Which IDEs?** Any JetBrains IDE 2026.2+ with AI Assistant.
+
+**Does it work offline?** Starting the agent does. Installing or updating the adapter needs
+the npm registry.
+
+**Where does it put things?** `~/.jetbrains/claude-acp-adapter/` for adapters and the
+launcher, and one entry in `~/.jetbrains/acp.json`.
+
+## Build from source
+
+Needs a JDK 21+ — the JetBrains Runtime inside any installed IDE will do. The Gradle wrapper
+is in the repository.
 
 ```bash
 ./gradlew test buildPlugin
 ```
 
-Артефакт — `build/distributions/claude-code-acp-bridge-<version>.zip`.
+The artifact is `build/distributions/claude-code-acp-bridge-<version>.zip`.
 
-Ничего настраивать не нужно: если в системе есть установленная JetBrains IDE, сборка идёт
-против неё, иначе скачивается опубликованный дистрибутив платформы — поэтому то же самое
-собирается на CI. Единственный кусок внутреннего API, `AgentIconService`, объявлен заглушкой
-в `src/stub` и в jar не попадает: в рантайме класс приходит из AI Assistant.
+Nothing needs configuring. If a JetBrains IDE is installed, the build uses it; otherwise it
+downloads the published platform — which is why the same build runs on CI. The one piece of
+internal API, `AgentIconService`, is a compile-only stub in `src/stub` and never packaged: at
+runtime the class comes from AI Assistant.
 
-`./gradlew verifyPlugin` прогоняет официальный Plugin Verifier — тот же, что гоняет
-маркетплейс при загрузке.
+```bash
+./gradlew verifyPlugin
+```
 
-## Проверка
+runs the official JetBrains Plugin Verifier, the same check the Marketplace performs on
+upload.
+
+## Verify it works
 
 ```bash
 ./test/handshake.sh
 ```
 
-Шлёт ACP `initialize` сгенерированному лаунчеру с заведомо испорченным `ANTHROPIC_API_KEY`
-и печатает версию адаптера и список методов авторизации. В нём должен быть `claude-ai-login`.
+Sends an ACP `initialize` to the generated launcher with a deliberately poisoned
+`ANTHROPIC_API_KEY` and prints the adapter version and its auth methods. `claude-ai-login`
+must be in the list — that is the method the bundled agent suppresses, and the whole reason
+this plugin exists.
 
-## CLI-фолбэк
+## CLI fallback (Zed and other ACP clients)
 
-`bin/claude-acp-sub` — тот же запуск адаптера как shell-скрипт, для случая без плагина
-(другая IDE, Zed, отладка). Требует `npm install` в корне репозитория.
+`bin/claude-acp-sub` runs the same adapter as a plain shell script, for use without the
+plugin — another editor, Zed, or debugging. Run `npm install` in the repository root first.
 
-## Ссылки
+## Credits and links
 
-- [`@agentclientprotocol/claude-agent-acp`](https://github.com/agentclientprotocol/claude-agent-acp)
-  ([npm](https://www.npmjs.com/package/@agentclientprotocol/claude-agent-acp), Apache-2.0,
-  Anthropic / Zed Industries / JetBrains) — собственно ACP-адаптер. Плагин его не содержит и
-  не патчит: ставит через npm и запускает без `--hide-claude-auth`. Вся работа с моделью,
-  инструментами и авторизацией — там.
-- [Agent Client Protocol](https://agentclientprotocol.com) — протокол, на котором говорят IDE и агент.
-- [ACP в JetBrains AI Assistant](https://www.jetbrains.com/help/ai-assistant/acp.html) — как IDE
-  подхватывает кастомных агентов и схема `~/.jetbrains/acp.json`.
-- [vanssata/jetbrains-claude-subscription](https://github.com/vanssata/jetbrains-claude-subscription)
-  — апстрим этого форка (MIT).
+- **[@agentclientprotocol/claude-agent-acp](https://github.com/agentclientprotocol/claude-agent-acp)**
+  ([npm](https://www.npmjs.com/package/@agentclientprotocol/claude-agent-acp)) — the ACP
+  adapter that does the actual work. Apache-2.0, by Anthropic, Zed Industries and JetBrains.
+  This plugin neither bundles nor modifies it; it is downloaded from npm on your machine.
+- **[Agent Client Protocol](https://agentclientprotocol.com)** — the protocol IDEs and coding
+  agents speak.
+- **[ACP in JetBrains AI Assistant](https://www.jetbrains.com/help/ai-assistant/acp.html)** —
+  how the IDE picks up custom agents, and the `~/.jetbrains/acp.json` schema.
+- **[vanssata/jetbrains-claude-subscription](https://github.com/vanssata/jetbrains-claude-subscription)**
+  — the upstream project this forks (MIT).
+- [`CLAUDE.md`](CLAUDE.md) — notes for anyone (or any agent) changing this code.
+
+## Keywords
+
+Claude Code JetBrains plugin · Claude Pro subscription IntelliJ · Claude Max subscription
+WebStorm · Agent Client Protocol · ACP agent JetBrains · claude-agent-acp · use Claude
+without API key in IDE · `--hide-claude-auth` · claude.ai subscription not supported ·
+JetBrains AI Assistant custom agent · acp.json · Claude Code in PhpStorm, PyCharm, GoLand,
+RubyMine, CLion, Rider, DataGrip
+
+## License
+
+MIT — see [`LICENSE`](LICENSE) and [`NOTICE`](NOTICE).
