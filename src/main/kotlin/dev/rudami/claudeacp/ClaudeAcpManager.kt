@@ -24,6 +24,7 @@ import kotlinx.coroutines.launch
 import java.net.URLEncoder
 import java.util.concurrent.ConcurrentHashMap
 import java.nio.charset.StandardCharsets
+import kotlin.time.Duration
 import kotlin.time.Duration.Companion.hours
 import kotlin.time.Duration.Companion.minutes
 
@@ -50,6 +51,9 @@ class ClaudeAcpManager(private val scope: CoroutineScope) {
     /** Versions with an install running, so a repeated request is not honoured twice. */
     private val installsInFlight = ConcurrentHashMap.newKeySet<String>()
 
+    /** Guards the launcher and the recorded version; see [withExclusiveAccess]. */
+    private val provisionLock = Any()
+
     /** Human-readable state for the settings page. */
     data class Status(val installedVersion: String?, val nodePath: String?)
 
@@ -70,7 +74,21 @@ class ClaudeAcpManager(private val scope: CoroutineScope) {
      * Safe to call repeatedly — [AcpConfigFile.upsertAgent] rewrites nothing when the entry
      * already matches, which matters because this runs on every IDE start.
      */
-    fun provision(indicator: ProgressIndicator? = null): Result<Unit> {
+    fun provision(indicator: ProgressIndicator? = null): Result<Unit> = withExclusiveAccess {
+        provisionLocked(indicator)
+    }
+
+    /**
+     * Serialises everything that repoints the agent.
+     *
+     * Startup provisioning and an Apply from the settings page can overlap, and both write
+     * the launcher and record a version. Each write is atomic on its own, so nothing is
+     * corrupted — but interleaved they can leave the launcher naming one build while the
+     * settings name another, and the disagreement survives until the next provision.
+     */
+    private fun <T> withExclusiveAccess(body: () -> T): T = synchronized(provisionLock, body)
+
+    private fun provisionLocked(indicator: ProgressIndicator?): Result<Unit> {
         if (!settings.state.manageAgent) {
             LOG.info("Agent management disabled in settings; leaving ${AcpConfigFile.path} alone")
             return Result.success(Unit)
@@ -361,7 +379,9 @@ class ClaudeAcpManager(private val scope: CoroutineScope) {
             object : Task.Backgroundable(project, "Installing Claude ACP adapter $version", true) {
                 override fun run(indicator: ProgressIndicator) {
                     try {
-                        install(indicator)
+                        // Held for the whole switch, so a startup provision cannot repoint
+                        // the launcher half way through one.
+                        withExclusiveAccess { install(indicator) }
                     } finally {
                         installsInFlight.remove(version)
                     }
@@ -465,8 +485,24 @@ class ClaudeAcpManager(private val scope: CoroutineScope) {
             while (isActive) {
                 runCatching { checkForUpdates(manual = false) }
                     .onFailure { LOG.warn("Periodic update check failed", it) }
-                delay(settings.state.checkIntervalHours.coerceAtLeast(1).hours)
+                waitForNextCheck()
             }
+        }
+    }
+
+    /**
+     * Sleeps until the next check is due, in slices.
+     *
+     * One `delay` for the whole interval reads the setting once and then commits to it, so
+     * shortening the interval from a fortnight to an hour would have taken effect a fortnight
+     * later. Waking every minute to compare elapsed time against the current setting costs
+     * nothing and makes the setting mean what it says.
+     */
+    private suspend fun waitForNextCheck() {
+        var elapsed = Duration.ZERO
+        while (elapsed < settings.state.checkIntervalHours.coerceAtLeast(1).hours) {
+            delay(POLL_SLICE)
+            elapsed += POLL_SLICE
         }
     }
 
@@ -494,6 +530,7 @@ class ClaudeAcpManager(private val scope: CoroutineScope) {
         private const val HTTP_TIMEOUT_MS = 10_000
         private const val ABBREVIATED_PACKUMENT = "application/vnd.npm.install-v1+json"
         private val STARTUP_GRACE = 2.minutes
+        private val POLL_SLICE = 1.minutes
 
         private val LOG = logger<ClaudeAcpManager>()
 
