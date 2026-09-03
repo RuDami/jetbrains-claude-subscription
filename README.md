@@ -1,5 +1,9 @@
 # Claude Code ACP Bridge — use a Claude Pro/Max subscription in JetBrains IDEs
 
+**Unofficial plugin.** A personal community project — not affiliated with, endorsed by, or
+supported by JetBrains or Anthropic. It is not distributed on JetBrains Marketplace; install
+it from the release zip below.
+
 A JetBrains IDE plugin that adds a **Claude Code (Subscription)** agent to AI Chat and signs
 in with your **Claude Pro or Max subscription** instead of an Anthropic API key. It installs
 and updates the official ACP adapter for you.
@@ -13,8 +17,7 @@ DataGrip — any 2026.2+ JetBrains IDE with the AI Assistant plugin.
 > **Fork notice.** Derived from
 > [vanssata/jetbrains-claude-subscription](https://github.com/vanssata/jetbrains-claude-subscription)
 > (MIT); `AcpConfigFile`, the icon extension point and the local-IDE build setup come from
-> there — see [`NOTICE`](NOTICE) for the file-by-file list. Not affiliated with, endorsed by
-> or supported by Anthropic or JetBrains.
+> there — see [`NOTICE`](NOTICE) for the file-by-file list.
 
 ## Table of contents
 

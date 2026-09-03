@@ -6,7 +6,7 @@ plugins {
 }
 
 group = "dev.rudami"
-version = "0.2.1"
+version = "0.2.2"
 
 repositories {
     mavenCentral()
@@ -86,6 +86,17 @@ intellijPlatform {
 
         changeNotes.set(
             """
+            <b>0.2.2</b>
+            <ul>
+              <li>Switching adapter version can no longer collide with the check that runs at
+                  IDE startup, which could leave the launcher and the recorded version naming
+                  different builds.</li>
+              <li>Changing the update interval now takes effect straight away instead of
+                  after the interval that was already running.</li>
+              <li>The version list refreshes when you point the plugin at a different
+                  registry.</li>
+            </ul>
+
             <b>0.2.1</b>
             <ul>
               <li>Fixed the settings page hanging on "Loading adapter versions".</li>
