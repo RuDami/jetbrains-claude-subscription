@@ -38,7 +38,7 @@ class ClaudePermissionsConfigurable(private val project: Project) : Configurable
     private val scopeCombo = ComboBox(ClaudeSettingsFile.Scope.entries.toTypedArray()).apply {
         renderer = SimpleScopeRenderer()
     }
-    private val modeCombo = ComboBox(PERMISSION_MODES)
+    private val modeCombo = ComboBox(PERMISSION_MODES).apply { toolTipText = MODE_HELP }
     private val allowArea = rulesArea()
     private val denyArea = rulesArea()
     private val askArea = rulesArea()
@@ -189,14 +189,32 @@ class ClaudePermissionsConfigurable(private val project: Project) : Configurable
             rows = 4
         }
 
-        /** "Inherit" is this page's way of writing no `defaultMode` at all. */
+        /**
+         * Every mode the SDK's settings schema accepts, plus "Inherit", which is this page's
+         * way of writing no `defaultMode` at all.
+         *
+         * The first cut listed four and silently dropped `auto` and `dontAsk` — a settings
+         * page that offers a subset of the valid values makes the missing ones look invalid.
+         */
         val PERMISSION_MODES = arrayOf(
             "Inherit",
             "default",
             "plan",
             "acceptEdits",
+            "auto",
+            "dontAsk",
             "bypassPermissions",
         )
+
+        /** Short enough to read in a tooltip; the full story is Claude Code's own docs. */
+        const val MODE_HELP = """<html>
+            default - prompts before anything dangerous<br>
+            plan - plans only, runs no tools<br>
+            acceptEdits - file edits go through without asking<br>
+            auto - a model classifier decides each prompt<br>
+            dontAsk - never prompts, denies whatever is not pre-approved<br>
+            bypassPermissions - skips permission checks entirely
+            </html>"""
 
         const val COMMENT_WRAP = 60
         const val MAX_PATH_CHARS = 45

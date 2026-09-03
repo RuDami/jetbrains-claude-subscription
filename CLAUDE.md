@@ -152,3 +152,7 @@ demands knowledge the UI does not provide is worse than no field.
 under the plugin's own page via `parentId`. It cannot be merged into it outright, because one
 edits a project file and the other holds application-wide settings, and a Configurable is
 either project- or application-scoped — but that is a reason to nest, not to sprawl.
+
+**Offer every valid value, not a subset.** The permission-mode dropdown shipped with four of
+the six modes the SDK schema accepts, which makes the two that were missing — `auto` and
+`dontAsk` — look invalid. When a field mirrors an upstream enum, copy the enum.
