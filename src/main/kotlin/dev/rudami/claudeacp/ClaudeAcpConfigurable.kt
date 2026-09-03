@@ -10,11 +10,13 @@ import com.intellij.openapi.progress.Task
 import com.intellij.openapi.ui.ComboBox
 import com.intellij.openapi.ui.Messages
 import com.intellij.openapi.vfs.LocalFileSystem
+import com.intellij.ui.JBColor
 import com.intellij.ui.components.JBCheckBox
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.dsl.builder.AlignX
 import com.intellij.ui.dsl.builder.Cell
 import com.intellij.ui.dsl.builder.panel
+import com.intellij.util.ui.AsyncProcessIcon
 import javax.swing.JButton
 import javax.swing.JComponent
 import javax.swing.JSpinner
@@ -41,6 +43,13 @@ class ClaudeAcpConfigurable : Configurable {
     private val statusLabel = JBLabel()
     private val diskLabel = JBLabel()
 
+    /** Spinner and error line, so a slow registry looks like waiting rather than nothing. */
+    private val busyIcon = AsyncProcessIcon("claude-acp-loading").apply { isVisible = false }
+    private val errorLabel = JBLabel().apply {
+        foreground = JBColor.RED
+        isVisible = false
+    }
+
     private val versionCombo = ComboBox<String>()
     private val policyCombo = ComboBox(UpdatePolicy.entries.toTypedArray())
     private val intervalSpinner = JSpinner(SpinnerNumberModel(24, 1, 24 * 14, 1))
@@ -61,7 +70,12 @@ class ClaudeAcpConfigurable : Configurable {
         managedControls.clear()
 
         return panel {
-            row("Status:") { cell(statusLabel).align(AlignX.FILL) }
+            row("Status:") {
+                cell(busyIcon)
+                cell(statusLabel).align(AlignX.FILL)
+            }
+
+            row { cell(errorLabel).align(AlignX.FILL) }
 
             row {
                 toggleButton = button("") { toggleAgent() }.component
@@ -82,12 +96,14 @@ class ClaudeAcpConfigurable : Configurable {
                 row {
                     button("Clean Up") { openCleanupDialog() }.managed()
                     button("Check for Updates") {
+                        beginBusy("Checking the registry")
                         inBackground("Checking for Claude ACP adapter updates") {
                             manager.checkForUpdates(manual = true)
                             reloadVersions(refresh = true)
                         }
                     }.managed()
                     button("Reinstall") {
+                        beginBusy("Reinstalling the adapter")
                         inBackground("Reprovisioning the Claude Code agent") {
                             manager.provision()
                             reloadVersions(refresh = false)
@@ -189,8 +205,10 @@ class ClaudeAcpConfigurable : Configurable {
 
         val desired = selectedVersion()
         if (versionChanged() && desired != null) {
+            beginBusy("Installing " + desired)
             manager.updateTo(desired, null) { reloadVersions(refresh = false) }
         } else {
+            beginBusy("Applying settings")
             inBackground("Applying Claude Code agent settings") {
                 manager.provision()
                 reloadVersions(refresh = false)
@@ -222,19 +240,23 @@ class ClaudeAcpConfigurable : Configurable {
 
             state.manageAgent = false
             syncManaged()
+            beginBusy("Removing the agent")
             inBackground("Removing the Claude Code agent") {
                 manager.removeAgentEntry()
                 manager.removeAdapterFiles()
                 invokeLater {
                     versionCombo.removeAllItems()
                     diskLabel.text = "nothing downloaded"
-                    refreshStatus()
+                    endBusy()
                 }
             }
         } else {
             state.manageAgent = true
             state.announced = false
             syncManaged()
+            // A first install downloads the adapter, which is the longest wait this page
+            // ever produces.
+            beginBusy("Downloading the adapter")
             inBackground("Setting up the Claude Code agent") {
                 manager.provision()
                 reloadVersions(refresh = false)
@@ -353,8 +375,11 @@ class ClaudeAcpConfigurable : Configurable {
     }
 
     private fun reloadVersions(refresh: Boolean) {
+        invokeLater { beginBusy("Loading adapter versions") }
+
         val installed = installer.installedVersions()
-        val published = manager.availableVersions(refresh).getOrNull().orEmpty()
+        val fetched = manager.availableVersions(refresh)
+        val published = fetched.getOrNull().orEmpty()
         val active = manager.status().installedVersion
 
         val rows = (published + installed)
@@ -378,8 +403,40 @@ class ClaudeAcpConfigurable : Configurable {
             rows.firstOrNull { it.substringBefore(' ') == active }
                 ?.let { versionCombo.selectedItem = it }
             diskLabel.text = summary
-            refreshStatus()
+
+            endBusy()
+            if (fetched.isFailure) {
+                // Not fatal: what is already downloaded still runs, and the list falls back
+                // to it. Saying so beats a combo that is silently short.
+                showError("Could not reach the registry. Showing downloaded versions only.")
+            }
         }
+    }
+
+    // ---------------------------------------------------------------- busy state
+
+    /**
+     * Startup work here is slow enough to look broken — the registry round trip, and on a
+     * first run an npm install — and all of it happens on a background thread while the
+     * page sits there empty. The spinner and this label are the only sign it is working.
+     */
+    private fun beginBusy(message: String) {
+        errorLabel.isVisible = false
+        busyIcon.isVisible = true
+        busyIcon.resume()
+        statusLabel.text = message + "..."
+        statusLabel.toolTipText = null
+    }
+
+    private fun endBusy() {
+        busyIcon.suspend()
+        busyIcon.isVisible = false
+        refreshStatus()
+    }
+
+    private fun showError(message: String) {
+        errorLabel.text = message
+        errorLabel.isVisible = true
     }
 
     private fun describeDisk(versions: Int, bytes: Long): String = when (versions) {
