@@ -5,17 +5,19 @@ import com.intellij.execution.process.CapturingProcessHandler
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.diagnostic.logger
 import com.intellij.openapi.progress.ProgressIndicator
+import com.intellij.openapi.util.io.FileUtil
 import java.io.RandomAccessFile
 import java.nio.channels.FileLock
-import java.util.concurrent.ConcurrentHashMap
-import com.intellij.openapi.util.io.FileUtil
+import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
+import java.util.concurrent.ConcurrentHashMap
 import kotlin.io.path.createDirectories
 import kotlin.io.path.isDirectory
 import kotlin.io.path.isRegularFile
 import kotlin.io.path.listDirectoryEntries
 import kotlin.io.path.name
+
 
 /**
  * Owns the on-disk copy of `@agentclientprotocol/claude-agent-acp`.
@@ -31,7 +33,12 @@ import kotlin.io.path.name
 @Service(Service.Level.APP)
 class AdapterInstaller {
 
-    val root: Path = Paths.get(System.getProperty("user.home"), ".jetbrains", "claude-acp-adapter")
+    /** Overridden by tests so they never touch the real home directory. */
+    @Volatile
+    internal var rootOverride: Path? = null
+
+    val root: Path
+        get() = rootOverride ?: Paths.get(System.getProperty("user.home"), ".jetbrains", "claude-acp-adapter")
 
     private val versionsRoot: Path get() = root.resolve("versions")
 
@@ -112,12 +119,45 @@ class AdapterInstaller {
         }
     }
 
-    /** Drops every installed version except the newest [keep], so rollback stays possible. */
-    fun pruneOldVersions(keep: Int = KEEP_VERSIONS) {
-        installedVersions().drop(keep).forEach { stale ->
+    /**
+     * Keeps [active] plus the newest [keep] - 1 others, so a rollback target survives.
+     *
+     * [active] is excluded explicitly rather than trusted to be newest: after a rollback it
+     * is precisely the oldest copy on disk, and dropping by recency alone deleted the very
+     * adapter the launcher points at.
+     */
+    fun pruneOldVersions(active: String?, keep: Int = KEEP_VERSIONS) {
+        val disposable = installedVersions().filter { it != active }
+        val survivors = if (active == null) keep else keep - 1
+
+        disposable.drop(survivors.coerceAtLeast(0)).forEach { stale ->
             LOG.info("Removing superseded adapter version $stale")
-            runCatching { FileUtil.delete(versionDir(stale).toFile()) }
+            delete(stale)
         }
+    }
+
+    /**
+     * Deletes every copy except [active].
+     *
+     * Deleting the active one too would leave the launcher pointing at nothing until the
+     * next startup reprovisioned it — a "free up disk space" button should never take the
+     * agent offline.
+     */
+    fun removeInactiveVersions(active: String?): List<String> =
+        installedVersions()
+            .filter { it != active }
+            .onEach { delete(it) }
+
+    /** Bytes held by the downloaded adapters. */
+    fun diskUsage(): Long =
+        runCatching {
+            Files.walk(versionsRoot).use { paths ->
+                paths.filter { it.isRegularFile() }.mapToLong { runCatching { Files.size(it) }.getOrDefault(0L) }.sum()
+            }
+        }.getOrDefault(0L)
+
+    private fun delete(version: String) {
+        runCatching { FileUtil.delete(versionDir(version).toFile()) }
     }
 
     /**

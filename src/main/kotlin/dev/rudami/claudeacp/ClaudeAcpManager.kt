@@ -90,7 +90,7 @@ class ClaudeAcpManager(private val scope: CoroutineScope) {
             }
 
         settings.state.installedVersion = version
-        installer.pruneOldVersions()
+        installer.pruneOldVersions(active = version)
 
         val launcher = LauncherScript.write(installer.root, runtime, entryPoint)
         return writeAgentEntry(launcher.toString(), version)
@@ -193,14 +193,29 @@ class ClaudeAcpManager(private val scope: CoroutineScope) {
     }
 
     /**
-     * Deletes the downloaded adapters. They are a cache — reinstalling fetches them again —
-     * and node_modules for a couple of versions is a hundred megabytes.
+     * Frees the copies that are not in use, leaving the running one alone.
+     *
+     * Returns the versions removed, so the caller can say what happened rather than leave
+     * the user guessing whether the button did anything.
+     */
+    fun cleanUpInactiveVersions(): List<String> {
+        val active = status().installedVersion
+        return installer.removeInactiveVersions(active)
+            .onEach { LOG.info("Removed unused adapter version $it") }
+    }
+
+    /**
+     * Deletes everything this plugin downloaded, including the running adapter. Only for
+     * uninstall — anywhere else it would leave the agent pointing at a missing launcher.
      */
     fun removeAdapterFiles() {
         LOG.info("Removing adapter directory ${installer.root}")
         runCatching { FileUtil.delete(installer.root.toFile()) }
         settings.state.installedVersion = null
     }
+
+    /** Bytes the downloaded adapters occupy. */
+    fun diskUsage(): Long = installer.diskUsage()
 
     fun removeAgentEntry() {
         AcpConfigFile.removeAgent(settings.displayName)
@@ -340,7 +355,7 @@ class ClaudeAcpManager(private val scope: CoroutineScope) {
                         .firstOrNull { VersionOrder.compare(it, version) > 0 }
                     settings.state.skippedVersion = newerOnDisk
 
-                    installer.pruneOldVersions()
+                    installer.pruneOldVersions(active = version)
 
                     val launcher = LauncherScript.write(installer.root, runtime, entryPoint)
                     val result = writeAgentEntry(launcher.toString(), version)

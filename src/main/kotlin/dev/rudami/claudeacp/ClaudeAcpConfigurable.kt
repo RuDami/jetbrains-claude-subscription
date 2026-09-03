@@ -5,6 +5,7 @@ import com.intellij.openapi.options.Configurable
 import com.intellij.openapi.progress.ProgressIndicator
 import com.intellij.openapi.progress.ProgressManager
 import com.intellij.openapi.progress.Task
+import com.intellij.openapi.ui.Messages
 import com.intellij.ui.components.JBCheckBox
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBTextField
@@ -36,6 +37,7 @@ class ClaudeAcpConfigurable : Configurable {
     private val installer get() = AdapterInstaller.getInstance()
 
     private val statusLabel = JBLabel()
+    private val diskLabel = JBLabel()
     private val versionCombo = JComboBox<String>()
     private val policyCombo = JComboBox(UpdatePolicy.entries.toTypedArray())
     private val intervalSpinner = JSpinner(SpinnerNumberModel(24, 1, 24 * 14, 1))
@@ -61,18 +63,28 @@ class ClaudeAcpConfigurable : Configurable {
                         .align(AlignX.FILL)
                         .comment(
                             "Every release published to the registry, newest first; the ones " +
-                                "already downloaded are marked. Choosing an older build is how " +
-                                "you roll back.",
+                                "already downloaded are marked. Pick one and press OK to switch " +
+                                "to it — choosing an older build is how you roll back.",
                             DEFAULT_COMMENT_WIDTH,
                         )
                 }
 
-                row {
-                    button("Use This Version") {
-                        selectedVersion()?.let { version ->
-                            manager.updateTo(version, null) { reloadVersions(refresh = false) }
+                row("Downloaded:") {
+                    cell(diskLabel).align(AlignX.FILL)
+                    button("Clean Up") {
+                        inBackground("Removing unused Claude ACP adapters") {
+                            val removed = manager.cleanUpInactiveVersions()
+                            reloadVersions(refresh = false)
+                            invokeLater { announceCleanup(removed) }
                         }
                     }
+                }.comment(
+                    "Removes every copy except the one in use, so this never takes the agent " +
+                        "offline. Older copies are also pruned automatically after an update.",
+                    DEFAULT_COMMENT_WIDTH,
+                )
+
+                row {
                     button("Check for Updates") {
                         inBackground("Checking for Claude ACP adapter updates") {
                             manager.checkForUpdates(manual = true)
@@ -142,11 +154,10 @@ class ClaudeAcpConfigurable : Configurable {
                         manager.removeAgentEntry()
                         refreshStatus()
                     }
-                    button("Delete Downloaded Adapters") {
-                        manager.removeAdapterFiles()
-                        reloadVersions(refresh = false)
-                    }
-                }
+                }.comment(
+                    "Other agents and your MCP settings in that file are left untouched.",
+                    DEFAULT_COMMENT_WIDTH,
+                )
             }
         }
     }
@@ -170,7 +181,8 @@ class ClaudeAcpConfigurable : Configurable {
 
     override fun isModified(): Boolean {
         val state = settings.state
-        return policyCombo.selectedItem != state.updatePolicy ||
+        return versionChanged() ||
+            policyCombo.selectedItem != state.updatePolicy ||
             intervalSpinner.value != state.checkIntervalHours ||
             registryField.text.trim() != state.registryUrl.orEmpty() ||
             nodeField.text.trim() != state.nodePathOverride.orEmpty() ||
@@ -189,11 +201,31 @@ class ClaudeAcpConfigurable : Configurable {
         state.useIdeaMcp = ideaMcpCheckBox.isSelected
         state.useCustomMcp = customMcpCheckBox.isSelected
 
-        // The MCP flags and the node override only take effect once the entry is rewritten.
-        inBackground("Applying Claude Code agent settings") {
-            manager.provision()
-            invokeLater { refreshStatus() }
+        // Switching version is an install; everything else just needs the entry rewritten
+        // for the change to reach the agent.
+        val desired = selectedVersion()
+        if (versionChanged() && desired != null) {
+            manager.updateTo(desired, null) { reloadVersions(refresh = false) }
+        } else {
+            inBackground("Applying Claude Code agent settings") {
+                manager.provision()
+                reloadVersions(refresh = false)
+            }
         }
+    }
+
+    private fun versionChanged(): Boolean {
+        val desired = selectedVersion() ?: return false
+        return desired != manager.status().installedVersion
+    }
+
+    private fun announceCleanup(removed: List<String>) {
+        val message = if (removed.isEmpty()) {
+            "Nothing to remove: the only adapter on disk is the one in use."
+        } else {
+            "Removed " + removed.joinToString() + "."
+        }
+        Messages.showInfoMessage(message, "Claude Code ACP Bridge")
     }
 
     /** The version behind the selected row, without its status decoration. */
@@ -224,11 +256,24 @@ class ClaudeAcpConfigurable : Configurable {
                 }
             }
 
+        // Walking a couple of node_modules trees is thousands of stat calls; it belongs on
+        // the caller's background thread, not on the EDT with the label update.
+        val summary = describeDisk(installed.size, manager.diskUsage())
+
         invokeLater {
             versionCombo.removeAllItems()
             rows.forEach { versionCombo.addItem(it) }
             rows.firstOrNull { it.substringBefore(' ') == active }?.let { versionCombo.selectedItem = it }
+            diskLabel.text = summary
             refreshStatus()
+        }
+    }
+
+    private fun describeDisk(versions: Int, bytes: Long): String = when (versions) {
+        0 -> "nothing downloaded yet"
+        else -> {
+            val copies = if (versions == 1) "1 copy" else "$versions copies"
+            "$copies, ${bytes / MEGABYTE} MB"
         }
     }
 
@@ -253,5 +298,6 @@ class ClaudeAcpConfigurable : Configurable {
 
     private companion object {
         const val DEFAULT_INTERVAL_HOURS = 24
+        const val MEGABYTE = 1024L * 1024L
     }
 }
