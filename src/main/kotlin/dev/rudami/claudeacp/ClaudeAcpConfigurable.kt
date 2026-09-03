@@ -63,6 +63,18 @@ class ClaudeAcpConfigurable : Configurable {
     private val managedControls = mutableListOf<JComponent>()
     private lateinit var toggleButton: JButton
 
+    /** Last snapshot taken off the EDT; see [refreshStatus]. */
+    private var lastStatus: ClaudeAcpManager.Status? = null
+
+    /**
+     * How many background operations are running.
+     *
+     * A flag would be wrong: two overlapping operations — the version list loading while an
+     * apply is under way — would have the first one to finish re-enable every control while
+     * the second is still going.
+     */
+    private var busyCount = 0
+
     override fun getDisplayName(): String = "Claude Code ACP Bridge"
 
     override fun createComponent(): JComponent {
@@ -209,7 +221,21 @@ class ClaudeAcpConfigurable : Configurable {
 
         syncManaged()
         refreshStatus()
-        inBackground("Listing Claude ACP adapter versions") { reloadVersions(refresh = false) }
+        inBackground("Listing Claude ACP adapter versions") {
+            loadDetectedNodes()
+            reloadVersions(refresh = false)
+        }
+    }
+
+    /**
+     * A background task started from this page can finish after the dialog is closed, and
+     * the page is rebuilt from scratch next time it opens. Dropping the references keeps a
+     * late arrival from repainting components nobody is looking at.
+     */
+    override fun disposeUIResources() {
+        managedControls.clear()
+        lastStatus = null
+        busyCount = 0
     }
 
     override fun isModified(): Boolean {
@@ -309,6 +335,8 @@ class ClaudeAcpConfigurable : Configurable {
         ideaMcpCheckBox.isSelected = true
         customMcpCheckBox.isSelected = true
         fillDetectedNodes(null)
+        // Clearing the combo drops the discovered interpreters with it, so they are put back.
+        inBackground("Detecting Node.js interpreters") { loadDetectedNodes() }
 
         // reloadVersions sorts descending, so the first row is the newest release.
         if (versionCombo.itemCount > 0) versionCombo.selectedIndex = 0
@@ -387,10 +415,24 @@ class ClaudeAcpConfigurable : Configurable {
     private fun fillDetectedNodes(current: String?) {
         nodeCombo.removeAllItems()
         nodeCombo.addItem(AUTOMATIC_NODE)
-
-        val detected = NodeRuntimeResolver.detectAll().map { it.toString() }
-        (detected + listOfNotNull(current)).distinct().forEach { nodeCombo.addItem(it) }
+        current?.let { nodeCombo.addItem(it) }
         nodeCombo.selectedItem = current ?: AUTOMATIC_NODE
+    }
+
+    /**
+     * Adds the interpreters found on this machine.
+     *
+     * Separate from [fillDetectedNodes] because finding them runs `node -v` on every
+     * candidate, which is a process spawn each — fine on a background thread, an outright
+     * freeze on the EDT, where the settings page used to do it while opening.
+     */
+    private fun loadDetectedNodes() {
+        val detected = NodeRuntimeResolver.detectAll().map { it.toString() }
+
+        invokeLater {
+            val existing = (0 until nodeCombo.itemCount).mapNotNull { nodeCombo.getItemAt(it) }
+            detected.filterNot { it in existing }.forEach { nodeCombo.addItem(it) }
+        }
     }
 
     private fun selectedVersion(): String? =
@@ -399,10 +441,17 @@ class ClaudeAcpConfigurable : Configurable {
             ?.substringBefore(' ')
             ?.takeIf { it.isNotBlank() }
 
+    /**
+     * Compares against the cached snapshot on purpose.
+     *
+     * The settings dialog calls [isModified] constantly — on focus changes and keystrokes —
+     * and a fresh status resolves the interpreter, which spawns a process. Reading the
+     * installed version out of settings is both accurate enough and free.
+     */
     private fun versionChanged(): Boolean {
         if (!settings.state.manageAgent) return false
         val desired = selectedVersion() ?: return false
-        return desired != manager.status().installedVersion
+        return desired != settings.state.installedVersion
     }
 
     private fun syncManaged() {
@@ -417,7 +466,10 @@ class ClaudeAcpConfigurable : Configurable {
         val installed = installer.installedVersions()
         val fetched = manager.availableVersions(refresh)
         val published = fetched.getOrNull().orEmpty()
-        val active = manager.status().installedVersion
+        // Taken here rather than on the EDT: producing it resolves the interpreter, which
+        // spawns `node -v`.
+        val status = manager.status()
+        val active = status.installedVersion
 
         val rows = (published + installed)
             .distinct()
@@ -440,6 +492,7 @@ class ClaudeAcpConfigurable : Configurable {
             rows.firstOrNull { it.substringBefore(' ') == active }
                 ?.let { versionCombo.selectedItem = it }
             diskLabel.text = summary
+            lastStatus = status
 
             endBusy()
             when {
@@ -461,6 +514,7 @@ class ClaudeAcpConfigurable : Configurable {
      * page sits there empty. The spinner and this label are the only sign it is working.
      */
     private fun beginBusy(message: String) {
+        busyCount++
         messageLabel.isVisible = false
         busyIcon.isVisible = true
         busyIcon.resume()
@@ -477,6 +531,9 @@ class ClaudeAcpConfigurable : Configurable {
     }
 
     private fun endBusy() {
+        busyCount = (busyCount - 1).coerceAtLeast(0)
+        if (busyCount > 0) return
+
         busyIcon.suspend()
         busyIcon.isVisible = false
         toggleButton.isEnabled = true
@@ -515,17 +572,30 @@ class ClaudeAcpConfigurable : Configurable {
     }
 
     /**
-     * A label is as wide as its text wants to be, and a path to a node binary has no space
-     * to wrap at — printing one in full stretched the dialog and put a scrollbar under it.
+     * Paints the status line from the last snapshot taken off the EDT.
+     *
+     * It never asks for a fresh one, because producing one resolves the Node interpreter,
+     * which runs `node -v` with a five-second timeout — a process spawn, on the EDT, every
+     * time this page repainted its own label. The background paths that already do slow work
+     * hand their snapshot here instead.
+     *
+     * A label is also as wide as its text wants to be, and a path to a node binary has no
+     * space to wrap at, so the path is abbreviated and kept in full in the tooltip.
      */
-    private fun refreshStatus() {
+    private fun refreshStatus(status: ClaudeAcpManager.Status? = lastStatus) {
         if (!settings.state.manageAgent) {
             statusLabel.text = "No agent installed"
             statusLabel.toolTipText = null
             return
         }
 
-        val status = manager.status()
+        if (status == null) {
+            statusLabel.text = "Checking..."
+            statusLabel.toolTipText = null
+            return
+        }
+
+        lastStatus = status
         val node = status.nodePath
 
         statusLabel.text = "Adapter " + (status.installedVersion ?: "not installed") +

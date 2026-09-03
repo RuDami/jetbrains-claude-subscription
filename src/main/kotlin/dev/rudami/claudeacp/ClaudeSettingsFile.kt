@@ -103,7 +103,8 @@ class ClaudeSettingsFile(val path: Path) {
         if (path.exists() && !backupPath.exists()) {
             runCatching { Files.copy(path, backupPath) }
         }
-        path.writeText(gson.toJson(root) + "\n")
+        // Atomic: the adapter watches this file and re-resolves settings on change.
+        path.writeAtomically(gson.toJson(root) + "\n")
         return true
     }
 

@@ -131,6 +131,8 @@ object AcpConfigFile {
             runCatching { Files.copy(path, backupPath) }
         }
 
-        path.writeText(gson.toJson(root) + "\n")
+        // Atomic: the IDE watches this file and re-reads it on change, so it must never be
+        // observed empty or half-written — that reads as "no local agents".
+        path.writeAtomically(gson.toJson(root) + "\n")
     }
 }

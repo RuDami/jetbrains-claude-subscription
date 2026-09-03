@@ -31,6 +31,25 @@ click that caused the duplicate install above.
 **Every button must say what it did.** These act on files and a config the user cannot see;
 without a message line, "repaired" and "did nothing" look identical.
 
+**Never do slow work on the EDT, and watch what "slow" hides behind.** Resolving the Node
+interpreter runs `node -v` on every candidate, with a five-second timeout each. That sat
+behind `ClaudeAcpManager.status()`, which the settings page called from `refreshStatus()`,
+from `isModified()` — which the dialog calls on every keystroke — and from filling the
+interpreter list while opening. Slow calls are named in their KDoc now; the page paints from
+a snapshot taken on a background thread.
+
+**Busy state is a counter, not a flag.** Two overlapping operations otherwise have the first
+one to finish re-enable every control while the second is still running.
+
+## Files everything else is watching
+
+**Every file this plugin writes is written atomically** — `Path.writeAtomically` — because
+each has a reader watching it: the IDE re-reads `acp.json` on change, the adapter re-resolves
+`.claude/settings.json`, and the shell reads the launcher when a chat starts. A plain write
+truncates first, so a watcher looking in between sees an empty file; for the JSON pair that
+reads as "not valid JSON", which is exactly the state both readers treat as "drop what you
+had".
+
 ## Version management
 
 **Never delete the active version.** `pruneOldVersions` kept the newest N, which after a

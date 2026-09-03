@@ -28,15 +28,18 @@ object LauncherScript {
 
     fun path(root: Path): Path = root.resolve(if (SystemInfo.isWindows) "launch.cmd" else "launch.sh")
 
-    /** Writes the launcher for [entryPoint] and returns its path. */
+    /**
+     * Writes the launcher for [entryPoint] and returns its path.
+     *
+     * Written atomically: the IDE starts a chat by running this script, and rewriting it in
+     * place — which provisioning does on every startup and every version change — leaves a
+     * window where a starting agent reads a truncated file.
+     */
     fun write(root: Path, runtime: NodeRuntime, entryPoint: Path): Path {
         val script = path(root)
-        script.createParentDirectories()
-        script.writeText(if (SystemInfo.isWindows) windows(runtime, entryPoint) else posix(runtime, entryPoint))
+        val body = if (SystemInfo.isWindows) windows(runtime, entryPoint) else posix(runtime, entryPoint)
 
-        if (!SystemInfo.isWindows) {
-            script.toFile().setExecutable(true, true)
-        }
+        script.writeAtomically(body, executable = !SystemInfo.isWindows)
         return script
     }
 
