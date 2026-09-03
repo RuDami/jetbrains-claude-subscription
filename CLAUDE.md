@@ -138,8 +138,17 @@ Code, not to this plugin. Merge the keys being edited and leave the rest — tho
 carry hooks, MCP servers and environment settings. Refuse to write when the file does not
 parse. `ClaudeSettingsFileTest` covers it.
 
-Distinguish an absent key from an empty array: for `availableModels`, absent means every
-model and `[]` means only the default one.
-
 An escalating `permissions.defaultMode` coming from a repo-committed source is filtered out
 by the CLI's trust policy, so it has to be set in personal settings to take effect.
+
+## Scope of settings
+
+**Do not add a setting the user cannot fill in correctly.** `availableModels` was offered and
+removed: model ids cannot be enumerated from here, the chat's own picker already covers
+choosing a model, and the key is documented as an administrator's control. A field that
+demands knowledge the UI does not provide is worse than no field.
+
+**Do not add a second top-level entry for the same feature.** The permissions page is nested
+under the plugin's own page via `parentId`. It cannot be merged into it outright, because one
+edits a project file and the other holds application-wide settings, and a Configurable is
+either project- or application-scoped — but that is a reason to nest, not to sprawl.

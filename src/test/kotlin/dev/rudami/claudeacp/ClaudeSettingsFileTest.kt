@@ -41,7 +41,6 @@ class ClaudeSettingsFileTest {
     fun `writes permissions into a file that does not exist yet`() {
         val written = settings.write(
             ClaudeSettingsFile.Permissions(allow = listOf("Bash(ls)"), defaultMode = "plan"),
-            emptyList(),
         )
 
         assertTrue(written)
@@ -62,7 +61,7 @@ class ClaudeSettingsFileTest {
             """.trimIndent(),
         )
 
-        settings.write(ClaudeSettingsFile.Permissions(deny = listOf("Read(./.env)")), emptyList())
+        settings.write(ClaudeSettingsFile.Permissions(deny = listOf("Read(./.env)")))
 
         val root = JsonParser.parseString(path.readText()).asJsonObject
         assertTrue(root.has("hooks"))
@@ -76,7 +75,7 @@ class ClaudeSettingsFileTest {
     fun `refuses to write over a file it cannot parse`() {
         path.writeText("{ not json")
 
-        val written = settings.write(ClaudeSettingsFile.Permissions(allow = listOf("Bash(ls)")), emptyList())
+        val written = settings.write(ClaudeSettingsFile.Permissions(allow = listOf("Bash(ls)")))
 
         assertFalse(written)
         assertEquals("{ not json", path.readText())
@@ -91,16 +90,15 @@ class ClaudeSettingsFileTest {
             defaultMode = "acceptEdits",
         )
 
-        settings.write(permissions, listOf("opus", "sonnet"))
+        settings.write(permissions)
 
         assertEquals(permissions, settings.readPermissions())
-        assertEquals(listOf("opus", "sonnet"), settings.readAvailableModels())
     }
 
     @Test
     fun `an empty permissions block leaves no empty object behind`() {
-        settings.write(ClaudeSettingsFile.Permissions(allow = listOf("Bash(ls)")), emptyList())
-        settings.write(ClaudeSettingsFile.Permissions(), emptyList())
+        settings.write(ClaudeSettingsFile.Permissions(allow = listOf("Bash(ls)")))
+        settings.write(ClaudeSettingsFile.Permissions())
 
         assertFalse(JsonParser.parseString(path.readText()).asJsonObject.has("permissions"))
     }
@@ -110,10 +108,10 @@ class ClaudeSettingsFileTest {
         path.writeText("""{ "env": { "FOO": "bar" } }""")
         val backup = path.resolveSibling("settings.json.before-claude-acp")
 
-        settings.write(ClaudeSettingsFile.Permissions(allow = listOf("Bash(ls)")), emptyList())
+        settings.write(ClaudeSettingsFile.Permissions(allow = listOf("Bash(ls)")))
         val original = backup.readText()
 
-        settings.write(ClaudeSettingsFile.Permissions(allow = listOf("Bash(pwd)")), emptyList())
+        settings.write(ClaudeSettingsFile.Permissions(allow = listOf("Bash(pwd)")))
         assertEquals(original, backup.readText())
     }
 

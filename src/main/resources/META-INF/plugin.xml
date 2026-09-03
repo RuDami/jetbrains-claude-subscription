@@ -42,12 +42,15 @@
         parentId="tools"
         instance="dev.rudami.claudeacp.ClaudeAcpConfigurable"
         displayName="Claude Code ACP Bridge"/>
-    <!-- Project-scoped because it edits the project's own .claude/settings.json. -->
+    <!-- Nested under the plugin's own page rather than added beside it in Tools: it is the
+         same feature, and a second top-level entry is one more thing to find. It cannot be
+         merged into that page outright because this one edits a file belonging to the
+         project while the other holds application-wide settings. -->
     <projectConfigurable
         id="dev.rudami.claudeacp.permissions"
-        parentId="tools"
+        parentId="dev.rudami.claudeacp.settings"
         instance="dev.rudami.claudeacp.ClaudePermissionsConfigurable"
-        displayName="Claude Code Permissions"/>
+        displayName="Permissions"/>
   </extensions>
 
   <applicationListeners>

@@ -15,11 +15,17 @@ import java.nio.file.Paths
 import javax.swing.JComponent
 
 /**
- * Settings | Tools | Claude Code Permissions — the project's `.claude/settings.json`.
+ * Settings | Tools | Claude Code ACP Bridge | Permissions — the project's
+ * `.claude/settings.json`.
  *
  * This is not our file: Claude Code reads it whether or not this plugin exists, and the
  * adapter watches it, so edits reach a running agent immediately. The page is a front end
- * for two keys, and everything else in the file is left exactly as found.
+ * for one key, and everything else in the file is left exactly as found.
+ *
+ * Deliberately not offering `availableModels`. The chat's own model picker already covers
+ * choosing a model, that key is documented as an administrator's control, and there is no
+ * way from here to enumerate the models an account can actually use — a field nobody can
+ * fill in correctly is worse than no field.
  *
  * Rules are Claude Code's own syntax, e.g. `Bash(npm run test:*)` or `Read(./.env)`.
  * Deny wins over allow.
@@ -36,12 +42,10 @@ class ClaudePermissionsConfigurable(private val project: Project) : Configurable
     private val allowArea = rulesArea()
     private val denyArea = rulesArea()
     private val askArea = rulesArea()
-    private val modelsArea = rulesArea()
     private val pathLabel = JBLabel()
 
     /** Reloaded whenever the scope changes, so the fields always show the chosen file. */
     private var loaded: ClaudeSettingsFile.Permissions = ClaudeSettingsFile.Permissions()
-    private var loadedModels: List<String> = emptyList()
 
     override fun getDisplayName(): String = "Claude Code Permissions"
 
@@ -85,13 +89,6 @@ class ClaudePermissionsConfigurable(private val project: Project) : Configurable
                     label("Deny wins over allow.")
                 }
             }
-
-            group("Models") {
-                rulesRow("Allowed models:", modelsArea)
-                row {
-                    label("Empty allows every model. Accepts opus, sonnet or a full model id.")
-                }
-            }
         }
     }
 
@@ -110,12 +107,11 @@ class ClaudePermissionsConfigurable(private val project: Project) : Configurable
         loadFromDisk()
     }
 
-    override fun isModified(): Boolean =
-        currentPermissions() != loaded || currentModels() != loadedModels
+    override fun isModified(): Boolean = currentPermissions() != loaded
 
     override fun apply() {
         val file = settingsFile()
-        val written = file.write(currentPermissions(), currentModels())
+        val written = file.write(currentPermissions())
 
         if (!written) {
             Messages.showErrorDialog(
@@ -127,7 +123,6 @@ class ClaudePermissionsConfigurable(private val project: Project) : Configurable
         }
 
         loaded = currentPermissions()
-        loadedModels = currentModels()
     }
 
     // ---------------------------------------------------------------- state
@@ -146,13 +141,11 @@ class ClaudePermissionsConfigurable(private val project: Project) : Configurable
         pathLabel.toolTipText = file.path.toString()
 
         loaded = file.readPermissions()
-        loadedModels = file.readAvailableModels()
 
         allowArea.text = loaded.allow.joinToString("\n")
         denyArea.text = loaded.deny.joinToString("\n")
         askArea.text = loaded.ask.joinToString("\n")
         modeCombo.selectedItem = loaded.defaultMode ?: PERMISSION_MODES.first()
-        modelsArea.text = loadedModels.joinToString("\n")
     }
 
     private fun currentPermissions() = ClaudeSettingsFile.Permissions(
@@ -161,8 +154,6 @@ class ClaudePermissionsConfigurable(private val project: Project) : Configurable
         ask = askArea.lines(),
         defaultMode = (modeCombo.selectedItem as? String)?.takeIf { it != PERMISSION_MODES.first() },
     )
-
-    private fun currentModels(): List<String> = modelsArea.lines()
 
     private fun JBTextArea.lines(): List<String> =
         text.lines().map { it.trim() }.filter { it.isNotEmpty() }

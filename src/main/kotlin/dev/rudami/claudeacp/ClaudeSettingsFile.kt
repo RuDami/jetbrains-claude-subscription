@@ -63,19 +63,16 @@ class ClaudeSettingsFile(val path: Path) {
         )
     }
 
-    fun readAvailableModels(): List<String> = read()?.strings(AVAILABLE_MODELS) ?: emptyList()
-
     /**
-     * Writes [permissions] and [availableModels], leaving every other key intact.
+     * Writes [permissions], leaving every other key intact.
      *
-     * An empty list removes its key rather than writing `[]`: for `availableModels` those
-     * mean opposite things — absent is "every model", empty is "only the default one" — and
-     * for the permission lists an empty array is noise in a file people read.
+     * An empty list removes its key rather than writing `[]`, which is noise in a file people
+     * read and edit by hand.
      *
      * @return false when the file exists but could not be parsed, in which case nothing was
      *   written.
      */
-    fun write(permissions: Permissions, availableModels: List<String>): Boolean {
+    fun write(permissions: Permissions): Boolean {
         val root = read() ?: return false
 
         val node = root.getAsJsonObject(PERMISSIONS) ?: JsonObject()
@@ -87,7 +84,6 @@ class ClaudeSettingsFile(val path: Path) {
         else node.addProperty(DEFAULT_MODE, permissions.defaultMode)
 
         if (node.size() == 0) root.remove(PERMISSIONS) else root.add(PERMISSIONS, node)
-        root.putStrings(AVAILABLE_MODELS, availableModels)
 
         path.createParentDirectories()
         if (path.exists() && !backupPath.exists()) {
@@ -116,6 +112,5 @@ class ClaudeSettingsFile(val path: Path) {
         const val DENY = "deny"
         const val ASK = "ask"
         const val DEFAULT_MODE = "defaultMode"
-        const val AVAILABLE_MODELS = "availableModels"
     }
 }
