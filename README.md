@@ -32,7 +32,6 @@ DataGrip — any 2026.2+ JetBrains IDE with the AI Assistant plugin.
 - [FAQ](#faq)
 - [Build from source](#build-from-source)
 - [Verify it works](#verify-it-works)
-- [CLI fallback (Zed and other ACP clients)](#cli-fallback-zed-and-other-acp-clients)
 - [Credits and links](#credits-and-links)
 - [Other Claude plugins for JetBrains](#other-claude-plugins-for-jetbrains-and-how-this-one-differs)
 
@@ -227,11 +226,6 @@ Sends an ACP `initialize` to the generated launcher with a deliberately poisoned
 `ANTHROPIC_API_KEY` and prints the adapter version and its auth methods. `claude-ai-login`
 must be in the list — that is the method the bundled agent suppresses, and the whole reason
 this plugin exists.
-
-## CLI fallback (Zed and other ACP clients)
-
-`bin/claude-acp-sub` runs the same adapter as a plain shell script, for use without the
-plugin — another editor, Zed, or debugging. Run `npm install` in the repository root first.
 
 ## Credits and links
 
