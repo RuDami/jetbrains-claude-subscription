@@ -249,7 +249,7 @@ class ClaudeAcpConfigurable : Configurable {
      * controls and rewrites labels on a page the platform may reuse.
      */
     private fun onUi(body: () -> Unit) {
-        onUi {
+        invokeLater {
             if (!disposed) body()
         }
     }
