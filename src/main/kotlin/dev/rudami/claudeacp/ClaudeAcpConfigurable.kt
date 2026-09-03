@@ -10,7 +10,6 @@ import com.intellij.ui.components.JBCheckBox
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBTextField
 import com.intellij.ui.dsl.builder.AlignX
-import com.intellij.ui.dsl.builder.DEFAULT_COMMENT_WIDTH
 import com.intellij.ui.dsl.builder.panel
 import javax.swing.JComboBox
 import javax.swing.JComponent
@@ -61,16 +60,13 @@ class ClaudeAcpConfigurable : Configurable {
                 row("Version:") {
                     cell(versionCombo)
                         .align(AlignX.FILL)
-                        .comment(
-                            "Every release published to the registry, newest first; the ones " +
-                                "already downloaded are marked. Pick one and press OK to switch " +
-                                "to it — choosing an older build is how you roll back.",
-                            DEFAULT_COMMENT_WIDTH,
-                        )
+                        .comment("Pick one and press OK to switch. An older build is a rollback.")
                 }
 
                 row("Downloaded:") {
-                    cell(diskLabel).align(AlignX.FILL)
+                    cell(diskLabel)
+                        .align(AlignX.FILL)
+                        .comment("Clean Up keeps only the copy in use.")
                     button("Clean Up") {
                         inBackground("Removing unused Claude ACP adapters") {
                             val removed = manager.cleanUpInactiveVersions()
@@ -78,11 +74,7 @@ class ClaudeAcpConfigurable : Configurable {
                             invokeLater { announceCleanup(removed) }
                         }
                     }
-                }.comment(
-                    "Removes every copy except the one in use, so this never takes the agent " +
-                        "offline. Older copies are also pruned automatically after an update.",
-                    DEFAULT_COMMENT_WIDTH,
-                )
+                }
 
                 row {
                     button("Check for Updates") {
@@ -104,11 +96,7 @@ class ClaudeAcpConfigurable : Configurable {
                 row("On a new release:") {
                     cell(policyCombo)
                         .align(AlignX.FILL)
-                        .comment(
-                            "The adapter is where subscription authentication lives, so an " +
-                                "unattended upgrade can change how logging in behaves.",
-                            DEFAULT_COMMENT_WIDTH,
-                        )
+                        .comment("Updates can change how subscription login behaves.")
                 }
 
                 row("Check every:") {
@@ -119,21 +107,14 @@ class ClaudeAcpConfigurable : Configurable {
                 row("Registry:") {
                     cell(registryField)
                         .align(AlignX.FILL)
-                        .comment(
-                            "Leave empty for " + ClaudeAcpSettings.DEFAULT_REGISTRY + ". Point " +
-                                "it at a mirror when npmjs.org is not reachable directly.",
-                            DEFAULT_COMMENT_WIDTH,
-                        )
+                        .comment("Empty uses the public npm registry.")
                 }
             }
 
             group("Agent") {
                 row {
                     cell(manageCheckBox)
-                        .comment(
-                            "Turn off to manage " + AcpConfigFile.path + " by hand.",
-                            DEFAULT_COMMENT_WIDTH,
-                        )
+                        .comment("Turn off to edit the ACP config by hand.")
                 }
                 row { cell(ideaMcpCheckBox) }
                 row { cell(customMcpCheckBox) }
@@ -141,12 +122,8 @@ class ClaudeAcpConfigurable : Configurable {
                 row("Node.js:") {
                     cell(nodeField)
                         .align(AlignX.FILL)
-                        .comment(
-                            "Leave empty to search your shell PATH and then the IDE's own ACP " +
-                                "runtimes. Node " + NodeRuntimeResolver.MINIMUM_MAJOR + " or " +
-                                "newer is required.",
-                            DEFAULT_COMMENT_WIDTH,
-                        )
+                        .comment("Empty searches PATH, then the IDE's own runtimes. Needs Node " +
+                            NodeRuntimeResolver.MINIMUM_MAJOR + "+.")
                 }
 
                 row {
@@ -154,10 +131,7 @@ class ClaudeAcpConfigurable : Configurable {
                         manager.removeAgentEntry()
                         refreshStatus()
                     }
-                }.comment(
-                    "Other agents and your MCP settings in that file are left untouched.",
-                    DEFAULT_COMMENT_WIDTH,
-                )
+                }
             }
         }
     }
@@ -282,10 +256,26 @@ class ClaudeAcpConfigurable : Configurable {
         customMcpCheckBox.isEnabled = manageCheckBox.isSelected
     }
 
+    /**
+     * A label is as wide as its text wants to be, and an absolute path to a node binary has
+     * no spaces to wrap at — printing one here stretched the whole dialog and put a
+     * horizontal scrollbar under it. The path is shortened for display and kept in full in
+     * the tooltip.
+     */
     private fun refreshStatus() {
         val status = manager.status()
+        val node = status.nodePath
+
         statusLabel.text = "Adapter " + (status.installedVersion ?: "not installed") +
-            ", node: " + (status.nodePath ?: "none found")
+            ", node " + (node?.let(::abbreviate) ?: "not found")
+        statusLabel.toolTipText = node
+    }
+
+    private fun abbreviate(path: String): String {
+        val home = System.getProperty("user.home")
+        val shortened = if (path.startsWith(home)) "~" + path.removePrefix(home) else path
+        return if (shortened.length <= MAX_PATH_CHARS) shortened
+        else "..." + shortened.takeLast(MAX_PATH_CHARS)
     }
 
     private fun inBackground(title: String, body: () -> Unit) {
@@ -299,5 +289,6 @@ class ClaudeAcpConfigurable : Configurable {
     private companion object {
         const val DEFAULT_INTERVAL_HOURS = 24
         const val MEGABYTE = 1024L * 1024L
+        const val MAX_PATH_CHARS = 40
     }
 }
