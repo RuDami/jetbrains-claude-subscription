@@ -38,6 +38,10 @@ class ClaudeAcpManager(private val scope: CoroutineScope) {
 
     private var updateLoop: Job? = null
 
+    /** The registry list is stable enough that reopening settings need not refetch it. */
+    @Volatile
+    private var cachedVersions: List<String>? = null
+
     /** Human-readable state for the settings page. */
     data class Status(val installedVersion: String?, val nodePath: String?, val agentRegistered: Boolean)
 
@@ -93,12 +97,14 @@ class ClaudeAcpManager(private val scope: CoroutineScope) {
     }
 
     /**
-     * Which version we should be running: an explicit pin wins, then whatever is already
-     * installed, and only a first run reaches out to the registry.
+     * Which version we should be running: whatever is already installed, and only a first
+     * run reaches out to the registry.
+     *
+     * Staying on the installed version is what makes "pinning" unnecessary — nothing moves
+     * it except an update the user accepted or a version they picked in settings.
      */
     private fun resolveTargetVersion(): String? =
-        settings.pinnedVersion
-            ?: settings.state.installedVersion?.takeIf { installer.isInstalled(it) }
+        settings.state.installedVersion?.takeIf { installer.isInstalled(it) }
             ?: installer.installedVersions().firstOrNull()
             ?: latestVersion().getOrNull()
 
@@ -222,7 +228,12 @@ class ClaudeAcpManager(private val scope: CoroutineScope) {
      * Asks for the abbreviated packument — the full one carries every version's complete
      * manifest and runs to hundreds of kilobytes.
      */
-    fun availableVersions(): Result<List<String>> = runCatching {
+    fun availableVersions(refresh: Boolean = false): Result<List<String>> {
+        if (!refresh) cachedVersions?.let { return Result.success(it) }
+        return fetchVersions().onSuccess { cachedVersions = it }
+    }
+
+    private fun fetchVersions(): Result<List<String>> = runCatching {
         val body = fetch("${settings.registry}/${encodedPackage()}") { request ->
             request.tuner { it.setRequestProperty("Accept", ABBREVIATED_PACKUMENT) }
         }
@@ -250,11 +261,6 @@ class ClaudeAcpManager(private val scope: CoroutineScope) {
      */
     fun checkForUpdates(manual: Boolean) {
         if (!manual && settings.state.updatePolicy == UpdatePolicy.OFF) return
-
-        if (settings.pinnedVersion != null && !manual) {
-            LOG.info("Adapter pinned to ${settings.pinnedVersion}; skipping update check")
-            return
-        }
 
         val latest = latestVersion().getOrElse { failure ->
             if (manual) {

@@ -46,9 +46,6 @@ class ClaudeAcpSettings : SimplePersistentStateComponent<ClaudeAcpSettings.State
         /** Adapter version currently unpacked under [AdapterInstaller.root]. */
         var installedVersion: String? by string(null)
 
-        /** Non-empty freezes the adapter at that version and stops update prompts. */
-        var pinnedVersion: String? by string(null)
-
         /** Latest version the user chose to ignore. */
         var skippedVersion: String? by string(null)
 
@@ -73,9 +70,6 @@ class ClaudeAcpSettings : SimplePersistentStateComponent<ClaudeAcpSettings.State
     }
 
     val displayName: String get() = state.displayName?.takeIf { it.isNotBlank() } ?: DEFAULT_DISPLAY_NAME
-
-    /** The version the plugin should converge on, ignoring what the registry says. */
-    val pinnedVersion: String? get() = state.pinnedVersion?.takeIf { it.isNotBlank() }
 
     /** Registry to install from and to poll for updates. */
     val registry: String get() = state.registryUrl?.takeIf { it.isNotBlank() } ?: DEFAULT_REGISTRY
