@@ -141,6 +141,18 @@ parse. `ClaudeSettingsFileTest` covers it.
 An escalating `permissions.defaultMode` coming from a repo-committed source is filtered out
 by the CLI's trust policy, so it has to be set in personal settings to take effect.
 
+**These files have another writer.** Picking "Always Allow" on a permission prompt in the
+chat makes the agent persist a rule through the SDK's `PermissionUpdate`, whose destination
+is `projectSettings` or `localSettings` — the very files this plugin's page edits. Writing
+back the lists as they looked when the page opened deletes every rule approved since, so the
+page applies a three-way merge: disk, minus what the user removed, plus what the user added.
+`defaultMode` follows the same rule and is only written when it was actually changed.
+
+**Rules still apply under `auto`.** The classifier only handles prompts that reach it; a deny
+rule short-circuits first, and the SDK lists both as separate sources of an auto-denial. The
+modes where rules genuinely decide nothing are `bypassPermissions`, which skips the checks,
+and `plan`, which runs no tools.
+
 ## Scope of settings
 
 **Do not add a setting the user cannot fill in correctly.** `availableModels` was offered and

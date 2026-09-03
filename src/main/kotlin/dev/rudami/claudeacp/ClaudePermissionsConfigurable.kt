@@ -43,6 +43,7 @@ class ClaudePermissionsConfigurable(private val project: Project) : Configurable
     private val denyArea = rulesArea()
     private val askArea = rulesArea()
     private val pathLabel = JBLabel()
+    private val rulesNotice = JBLabel().apply { isVisible = false }
 
     /** Reloaded whenever the scope changes, so the fields always show the chosen file. */
     private var loaded: ClaudeSettingsFile.Permissions = ClaudeSettingsFile.Permissions()
@@ -51,6 +52,7 @@ class ClaudePermissionsConfigurable(private val project: Project) : Configurable
 
     override fun createComponent(): JComponent {
         scopeCombo.addActionListener { loadFromDisk() }
+        modeCombo.addActionListener { syncRulesEnabled() }
 
         return panel {
             row("Applies to:") {
@@ -77,26 +79,36 @@ class ClaudePermissionsConfigurable(private val project: Project) : Configurable
             }
 
             group("Rules") {
-                row {
-                    label("One per line, for example Bash(npm run test:*) or Read(./.env).")
-                }
+                row { cell(rulesNotice).align(AlignX.FILL) }
 
-                rulesRow("Always allow:", allowArea)
-                rulesRow("Always ask:", askArea)
-                rulesRow("Never allow:", denyArea)
+                rulesRow("Always allow:", allowArea, "Runs without asking.")
+                rulesRow("Always ask:", askArea, "Prompts even when another rule allows it.")
+                rulesRow("Never allow:", denyArea, "Refused outright. Deny wins over allow.")
 
                 row {
-                    label("Deny wins over allow.")
+                    comment(
+                        "One rule per line: a tool name, optionally narrowed in brackets. " +
+                            "Bash(npm run test:*) allows those commands only; Read(./.env) " +
+                            "covers that path. A bare tool name such as Edit covers every use " +
+                            "of it. The chat writes here too: choosing Always Allow on a " +
+                            "prompt adds a rule to this file, and this page keeps those.",
+                        COMMENT_WRAP,
+                    )
                 }
             }
         }
     }
 
-    private fun com.intellij.ui.dsl.builder.Panel.rulesRow(label: String, area: JBTextArea) {
+    private fun com.intellij.ui.dsl.builder.Panel.rulesRow(
+        label: String,
+        area: JBTextArea,
+        description: String,
+    ) {
         row(label) {
             cell(JBScrollPane(area))
                 .align(AlignX.FILL)
                 .applyToComponent { preferredSize = Dimension(320, 70) }
+                .comment(description, COMMENT_WRAP)
         }
     }
 
@@ -111,7 +123,9 @@ class ClaudePermissionsConfigurable(private val project: Project) : Configurable
 
     override fun apply() {
         val file = settingsFile()
-        val written = file.write(currentPermissions())
+        // `loaded` is the baseline, so rules the chat approved while this page was open are
+        // merged rather than overwritten.
+        val written = file.write(loaded, currentPermissions())
 
         if (!written) {
             Messages.showErrorDialog(
@@ -122,7 +136,9 @@ class ClaudePermissionsConfigurable(private val project: Project) : Configurable
             return
         }
 
-        loaded = currentPermissions()
+        // Re-read rather than trusting the edit: the merge may have kept rules that arrived
+        // from the chat, and the fields should show what the file now holds.
+        loadFromDisk()
     }
 
     // ---------------------------------------------------------------- state
@@ -146,6 +162,7 @@ class ClaudePermissionsConfigurable(private val project: Project) : Configurable
         denyArea.text = loaded.deny.joinToString("\n")
         askArea.text = loaded.ask.joinToString("\n")
         modeCombo.selectedItem = loaded.defaultMode ?: PERMISSION_MODES.first()
+        syncRulesEnabled()
     }
 
     private fun currentPermissions() = ClaudeSettingsFile.Permissions(
@@ -154,6 +171,28 @@ class ClaudePermissionsConfigurable(private val project: Project) : Configurable
         ask = askArea.lines(),
         defaultMode = (modeCombo.selectedItem as? String)?.takeIf { it != PERMISSION_MODES.first() },
     )
+
+    /**
+     * Greys the rule editors out under the modes that make them moot, and says which.
+     *
+     * `bypassPermissions` skips permission checks altogether and `plan` runs no tools at all,
+     * so rules decide nothing under either. `auto` is *not* one of them, tempting as it looks:
+     * the classifier only handles prompts that reach it, and a deny rule still short-circuits
+     * before that — the SDK lists the auto-mode classifier and deny rules side by side as
+     * separate sources of an auto-denial.
+     */
+    private fun syncRulesEnabled() {
+        val mode = modeCombo.selectedItem as? String
+        val notice = when (mode) {
+            "bypassPermissions" -> "This mode skips permission checks, so no rule applies."
+            "plan" -> "This mode runs no tools, so no rule applies."
+            else -> null
+        }
+
+        listOf(allowArea, denyArea, askArea).forEach { it.isEnabled = notice == null }
+        rulesNotice.text = notice.orEmpty()
+        rulesNotice.isVisible = notice != null
+    }
 
     private fun JBTextArea.lines(): List<String> =
         text.lines().map { it.trim() }.filter { it.isNotEmpty() }

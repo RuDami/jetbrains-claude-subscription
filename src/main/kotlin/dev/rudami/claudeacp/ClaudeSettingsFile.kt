@@ -64,7 +64,17 @@ class ClaudeSettingsFile(val path: Path) {
     }
 
     /**
-     * Writes [permissions], leaving every other key intact.
+     * Applies the difference between [baseline] and [edited] to whatever is on disk now.
+     *
+     * A plain overwrite would be wrong, because this file has another writer: choosing
+     * "always allow" in the chat makes the agent persist a rule here through the SDK's
+     * `PermissionUpdate` with a `projectSettings` or `localSettings` destination. Writing
+     * back the lists as they looked when this page opened would delete every rule approved
+     * since. So only what the user actually added or removed is applied, and rules that
+     * appeared meanwhile survive.
+     *
+     * [baseline] is the state this page was populated from. `defaultMode` follows the same
+     * rule: it is only written when the user changed it.
      *
      * An empty list removes its key rather than writing `[]`, which is noise in a file people
      * read and edit by hand.
@@ -72,16 +82,20 @@ class ClaudeSettingsFile(val path: Path) {
      * @return false when the file exists but could not be parsed, in which case nothing was
      *   written.
      */
-    fun write(permissions: Permissions): Boolean {
+    fun write(baseline: Permissions, edited: Permissions): Boolean {
         val root = read() ?: return false
 
         val node = root.getAsJsonObject(PERMISSIONS) ?: JsonObject()
-        node.putStrings(ALLOW, permissions.allow)
-        node.putStrings(DENY, permissions.deny)
-        node.putStrings(ASK, permissions.ask)
+        node.putStrings(ALLOW, merge(node.strings(ALLOW), baseline.allow, edited.allow))
+        node.putStrings(DENY, merge(node.strings(DENY), baseline.deny, edited.deny))
+        node.putStrings(ASK, merge(node.strings(ASK), baseline.ask, edited.ask))
 
-        if (permissions.defaultMode.isNullOrBlank()) node.remove(DEFAULT_MODE)
-        else node.addProperty(DEFAULT_MODE, permissions.defaultMode)
+        val mode = if (edited.defaultMode == baseline.defaultMode) {
+            node.get(DEFAULT_MODE)?.asString
+        } else {
+            edited.defaultMode
+        }
+        if (mode.isNullOrBlank()) node.remove(DEFAULT_MODE) else node.addProperty(DEFAULT_MODE, mode)
 
         if (node.size() == 0) root.remove(PERMISSIONS) else root.add(PERMISSIONS, node)
 
@@ -94,6 +108,16 @@ class ClaudeSettingsFile(val path: Path) {
     }
 
     private val backupPath: Path get() = path.resolveSibling(path.fileName.toString() + ".before-claude-acp")
+
+    /**
+     * Three-way merge of one rule list: take what is on disk, drop what the user deleted,
+     * append what the user added, and keep the order stable so the file stays readable.
+     */
+    private fun merge(onDisk: List<String>, baseline: List<String>, edited: List<String>): List<String> {
+        val removed = baseline - edited.toSet()
+        val added = edited - baseline.toSet()
+        return (onDisk - removed.toSet() + added).distinct()
+    }
 
     private fun JsonObject.strings(key: String): List<String> =
         getAsJsonArray(key)?.mapNotNull { runCatching { it.asString }.getOrNull() }.orEmpty()

@@ -14,8 +14,9 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
- * The file belongs to the user and to Claude Code, not to this plugin, so the behaviour
- * worth testing is what survives a write.
+ * The file belongs to the user and to Claude Code — the agent writes rules here itself when
+ * someone picks "always allow" in the chat — so the behaviour worth testing is what survives
+ * a write from this plugin.
  */
 class ClaudeSettingsFileTest {
 
@@ -37,16 +38,23 @@ class ClaudeSettingsFileTest {
 
     private val path get() = settings.path
 
+    private val nothing = ClaudeSettingsFile.Permissions()
+
+    private fun permissions(
+        allow: List<String> = emptyList(),
+        deny: List<String> = emptyList(),
+        ask: List<String> = emptyList(),
+        defaultMode: String? = null,
+    ) = ClaudeSettingsFile.Permissions(allow, deny, ask, defaultMode)
+
     @Test
     fun `writes permissions into a file that does not exist yet`() {
-        val written = settings.write(
-            ClaudeSettingsFile.Permissions(allow = listOf("Bash(ls)"), defaultMode = "plan"),
-        )
+        val written = settings.write(nothing, permissions(allow = listOf("Bash(ls)"), defaultMode = "plan"))
 
         assertTrue(written)
-        val permissions = JsonParser.parseString(path.readText()).asJsonObject.getAsJsonObject("permissions")
-        assertEquals("Bash(ls)", permissions.getAsJsonArray("allow").first().asString)
-        assertEquals("plan", permissions.get("defaultMode").asString)
+        val node = JsonParser.parseString(path.readText()).asJsonObject.getAsJsonObject("permissions")
+        assertEquals("Bash(ls)", node.getAsJsonArray("allow").first().asString)
+        assertEquals("plan", node.get("defaultMode").asString)
     }
 
     @Test
@@ -61,21 +69,67 @@ class ClaudeSettingsFileTest {
             """.trimIndent(),
         )
 
-        settings.write(ClaudeSettingsFile.Permissions(deny = listOf("Read(./.env)")))
+        settings.write(permissions(allow = listOf("Bash(ls)")), permissions(deny = listOf("Read(./.env)")))
 
         val root = JsonParser.parseString(path.readText()).asJsonObject
         assertTrue(root.has("hooks"))
         assertEquals("bar", root.getAsJsonObject("env").get("FOO").asString)
-        val permissions = root.getAsJsonObject("permissions")
-        assertEquals("Read(./.env)", permissions.getAsJsonArray("deny").first().asString)
-        assertFalse(permissions.has("allow"), "an emptied list should be removed, not left as []")
+        val node = root.getAsJsonObject("permissions")
+        assertEquals("Read(./.env)", node.getAsJsonArray("deny").first().asString)
+        assertFalse(node.has("allow"), "an emptied list should be removed, not left as []")
+    }
+
+    /**
+     * The case that makes a plain overwrite wrong: the agent persists an approved rule while
+     * the settings page sits open on an older snapshot.
+     */
+    @Test
+    fun `keeps a rule the agent added while the page was open`() {
+        val baseline = permissions(allow = listOf("Bash(ls)"))
+        path.writeText("""{ "permissions": { "allow": ["Bash(ls)", "Bash(git status)"] } }""")
+
+        settings.write(baseline, permissions(allow = listOf("Bash(ls)", "Bash(pwd)")))
+
+        val allow = settings.readPermissions().allow
+        assertTrue("Bash(git status)" in allow, "a concurrently approved rule must survive")
+        assertTrue("Bash(pwd)" in allow, "the rule typed on the page must be added")
+    }
+
+    @Test
+    fun `a rule deleted on the page is removed from disk`() {
+        val baseline = permissions(allow = listOf("Bash(ls)", "Bash(rm -rf)"))
+        path.writeText("""{ "permissions": { "allow": ["Bash(ls)", "Bash(rm -rf)"] } }""")
+
+        settings.write(baseline, permissions(allow = listOf("Bash(ls)")))
+
+        assertEquals(listOf("Bash(ls)"), settings.readPermissions().allow)
+    }
+
+    @Test
+    fun `an unchanged mode does not overwrite one set elsewhere`() {
+        val baseline = permissions(allow = listOf("Bash(ls)"))
+        path.writeText("""{ "permissions": { "allow": ["Bash(ls)"], "defaultMode": "acceptEdits" } }""")
+
+        settings.write(baseline, permissions(allow = listOf("Bash(ls)", "Bash(pwd)")))
+
+        assertEquals("acceptEdits", settings.readPermissions().defaultMode)
+    }
+
+    @Test
+    fun `a changed mode wins`() {
+        val baseline = permissions(defaultMode = "acceptEdits")
+        path.writeText("""{ "permissions": { "defaultMode": "acceptEdits" } }""")
+
+        settings.write(baseline, permissions(defaultMode = "plan"))
+
+        assertEquals("plan", settings.readPermissions().defaultMode)
     }
 
     @Test
     fun `refuses to write over a file it cannot parse`() {
         path.writeText("{ not json")
 
-        val written = settings.write(ClaudeSettingsFile.Permissions(allow = listOf("Bash(ls)")))
+        val written = settings.write(nothing, permissions(allow = listOf("Bash(ls)")))
 
         assertFalse(written)
         assertEquals("{ not json", path.readText())
@@ -83,22 +137,22 @@ class ClaudeSettingsFileTest {
 
     @Test
     fun `reads back what it wrote`() {
-        val permissions = ClaudeSettingsFile.Permissions(
+        val edited = permissions(
             allow = listOf("Bash(npm test)"),
             deny = listOf("Read(./.env)"),
             ask = listOf("Bash(git push)"),
             defaultMode = "acceptEdits",
         )
 
-        settings.write(permissions)
+        settings.write(nothing, edited)
 
-        assertEquals(permissions, settings.readPermissions())
+        assertEquals(edited, settings.readPermissions())
     }
 
     @Test
     fun `an empty permissions block leaves no empty object behind`() {
-        settings.write(ClaudeSettingsFile.Permissions(allow = listOf("Bash(ls)")))
-        settings.write(ClaudeSettingsFile.Permissions())
+        settings.write(nothing, permissions(allow = listOf("Bash(ls)")))
+        settings.write(permissions(allow = listOf("Bash(ls)")), nothing)
 
         assertFalse(JsonParser.parseString(path.readText()).asJsonObject.has("permissions"))
     }
@@ -108,18 +162,16 @@ class ClaudeSettingsFileTest {
         path.writeText("""{ "env": { "FOO": "bar" } }""")
         val backup = path.resolveSibling("settings.json.before-claude-acp")
 
-        settings.write(ClaudeSettingsFile.Permissions(allow = listOf("Bash(ls)")))
+        settings.write(nothing, permissions(allow = listOf("Bash(ls)")))
         val original = backup.readText()
 
-        settings.write(ClaudeSettingsFile.Permissions(allow = listOf("Bash(pwd)")))
+        settings.write(nothing, permissions(allow = listOf("Bash(pwd)")))
         assertEquals(original, backup.readText())
     }
 
     @Test
     fun `scope picks the right file name`() {
-        assertTrue(
-            ClaudeSettingsFile.Scope.SHARED.fileIn(directory).endsWith(".claude/settings.json"),
-        )
+        assertTrue(ClaudeSettingsFile.Scope.SHARED.fileIn(directory).endsWith(".claude/settings.json"))
         assertTrue(
             ClaudeSettingsFile.Scope.PERSONAL.fileIn(directory).endsWith(".claude/settings.local.json"),
         )
