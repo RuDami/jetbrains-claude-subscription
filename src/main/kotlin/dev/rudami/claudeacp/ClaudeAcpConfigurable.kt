@@ -73,7 +73,7 @@ class ClaudeAcpConfigurable : Configurable {
      * apply is under way — would have the first one to finish re-enable every control while
      * the second is still going.
      */
-    private var busyCount = 0
+    private val busy = ClaudeAcpPageModel.BusyCounter()
 
     /** Set once the page is closed; see [onUi]. */
     private var disposed = false
@@ -238,7 +238,7 @@ class ClaudeAcpConfigurable : Configurable {
         disposed = true
         managedControls.clear()
         lastStatus = null
-        busyCount = 0
+        busy.reset()
     }
 
     /**
@@ -254,16 +254,22 @@ class ClaudeAcpConfigurable : Configurable {
         }
     }
 
-    override fun isModified(): Boolean {
-        val state = settings.state
-        return versionChanged() ||
-            policyCombo.selectedItem != state.updatePolicy ||
-            intervalSpinner.value != state.checkIntervalHours ||
-            registryChoice() != state.registryUrl ||
-            nodeChoice() != state.nodePathOverride ||
-            ideaMcpCheckBox.isSelected != state.useIdeaMcp ||
-            customMcpCheckBox.isSelected != state.useCustomMcp
-    }
+    override fun isModified(): Boolean = ClaudeAcpPageModel.isModified(
+        edited = currentForm(),
+        stored = ClaudeAcpPageModel.formOf(settings.state),
+        managed = settings.state.manageAgent,
+    )
+
+    /** What the controls currently say, in the shape the model compares. */
+    private fun currentForm() = ClaudeAcpPageModel.Form(
+        version = selectedVersion(),
+        policy = policyCombo.selectedItem as? UpdatePolicy ?: UpdatePolicy.NOTIFY,
+        intervalHours = intervalSpinner.value as? Int ?: DEFAULT_INTERVAL_HOURS,
+        registry = registryChoice(),
+        nodePath = nodeChoice(),
+        useIdeaMcp = ideaMcpCheckBox.isSelected,
+        useCustomMcp = customMcpCheckBox.isSelected,
+    )
 
     override fun apply() {
         val state = settings.state
@@ -424,12 +430,10 @@ class ClaudeAcpConfigurable : Configurable {
 
     /** Null when the default is chosen, so stored settings hold an override or nothing. */
     private fun registryChoice(): String? =
-        (registryCombo.editor.item as? String)
-            ?.trim()
-            ?.takeIf { it.isNotEmpty() && it != ClaudeAcpSettings.DEFAULT_REGISTRY }
+        ClaudeAcpPageModel.registryChoice(registryCombo.editor.item as? String)
 
     private fun nodeChoice(): String? =
-        (nodeCombo.selectedItem as? String)?.takeIf { it != AUTOMATIC_NODE }
+        ClaudeAcpPageModel.nodeChoice(nodeCombo.selectedItem as? String)
 
     /**
      * Lists what the machine has, with the default spelled out rather than left blank.
@@ -462,17 +466,14 @@ class ClaudeAcpConfigurable : Configurable {
     }
 
     private fun selectedVersion(): String? =
-        (versionCombo.selectedItem as? String)
-            ?.takeIf { it != LOADING_ITEM }
-            ?.substringBefore(' ')
-            ?.takeIf { it.isNotBlank() }
+        ClaudeAcpPageModel.versionOf(versionCombo.selectedItem as? String)
 
     /**
-     * Compares against the cached snapshot on purpose.
+     * Whether the picker asks for a different build than the one recorded.
      *
-     * The settings dialog calls [isModified] constantly — on focus changes and keystrokes —
-     * and a fresh status resolves the interpreter, which spawns a process. Reading the
-     * installed version out of settings is both accurate enough and free.
+     * Recorded, not resolved: the settings dialog calls [isModified] constantly — on focus
+     * changes and keystrokes — and producing a fresh status resolves the interpreter, which
+     * spawns a process.
      */
     private fun versionChanged(): Boolean {
         if (!settings.state.manageAgent) return false
@@ -500,25 +501,16 @@ class ClaudeAcpConfigurable : Configurable {
         val status = manager.status()
         val active = status.installedVersion
 
-        val rows = (published + installed)
-            .distinct()
-            .sortedWith(VersionOrder.reversed())
-            .map { version ->
-                when {
-                    version == active -> version + " - active"
-                    version in installed -> version + " - downloaded"
-                    else -> version
-                }
-            }
+        val rows = ClaudeAcpPageModel.versionRows(published, installed, active)
 
         // Walking a couple of node_modules trees is thousands of stat calls, so it stays on
         // this background thread rather than riding along with the label update on the EDT.
-        val summary = describeDisk(installed.size, manager.diskUsage())
+        val summary = ClaudeAcpPageModel.describeDisk(installed.size, manager.diskUsage())
 
         onUi {
             versionCombo.removeAllItems()
             rows.forEach { versionCombo.addItem(it) }
-            rows.firstOrNull { it.substringBefore(' ') == active }
+            rows.firstOrNull { ClaudeAcpPageModel.versionOf(it) == active }
                 ?.let { versionCombo.selectedItem = it }
             diskLabel.text = summary
             lastStatus = status
@@ -529,7 +521,9 @@ class ClaudeAcpConfigurable : Configurable {
                 fetched.isFailure ->
                     showError("Could not reach the registry. Showing downloaded versions only.")
 
-                report -> showInfo(describeFreshness(published.firstOrNull(), active))
+                report -> showInfo(
+                    ClaudeAcpPageModel.describeFreshness(published.firstOrNull(), active),
+                )
             }
         }
     }
@@ -542,7 +536,10 @@ class ClaudeAcpConfigurable : Configurable {
      * page sits there empty. The spinner and this label are the only sign it is working.
      */
     private fun beginBusy(message: String) {
-        busyCount++
+        // The result is deliberately ignored: joining an existing busy state should still
+        // update the label to name the newest operation, and every other effect here is
+        // idempotent.
+        busy.begin()
         messageLabel.isVisible = false
         busyIcon.isVisible = true
         busyIcon.resume()
@@ -559,8 +556,7 @@ class ClaudeAcpConfigurable : Configurable {
     }
 
     private fun endBusy() {
-        busyCount = (busyCount - 1).coerceAtLeast(0)
-        if (busyCount > 0) return
+        if (!busy.end()) return
 
         busyIcon.suspend()
         busyIcon.isVisible = false
@@ -584,19 +580,6 @@ class ClaudeAcpConfigurable : Configurable {
         messageLabel.text = message
         messageLabel.foreground = color
         messageLabel.isVisible = true
-    }
-
-    private fun describeFreshness(newest: String?, active: String?): String = when {
-        newest == null -> "The registry returned no versions."
-        active == null -> "Newest release is " + newest + ". Nothing is installed yet."
-        VersionOrder.compare(newest, active) > 0 -> "Update available: " + newest + "."
-        else -> "Up to date on " + active + "."
-    }
-
-    private fun describeDisk(versions: Int, bytes: Long): String = when (versions) {
-        0 -> "nothing downloaded"
-        1 -> "1 copy, " + (bytes / MEGABYTE) + " MB"
-        else -> versions.toString() + " copies, " + (bytes / MEGABYTE) + " MB"
     }
 
     /**
@@ -624,18 +607,12 @@ class ClaudeAcpConfigurable : Configurable {
         }
 
         lastStatus = status
-        val node = status.nodePath
-
-        statusLabel.text = "Adapter " + (status.installedVersion ?: "not installed") +
-            ", node " + (node?.let(::abbreviate) ?: "not found")
-        statusLabel.toolTipText = node
-    }
-
-    private fun abbreviate(path: String): String {
-        val home = System.getProperty("user.home")
-        val shortened = if (path.startsWith(home)) "~" + path.removePrefix(home) else path
-        return if (shortened.length <= MAX_PATH_CHARS) shortened
-        else "..." + shortened.takeLast(MAX_PATH_CHARS)
+        statusLabel.text = ClaudeAcpPageModel.describeStatus(
+            status.installedVersion,
+            status.nodePath,
+            System.getProperty("user.home").orEmpty(),
+        )
+        statusLabel.toolTipText = status.nodePath
     }
 
     /**
@@ -664,10 +641,10 @@ class ClaudeAcpConfigurable : Configurable {
 
     private companion object {
         const val DEFAULT_INTERVAL_HOURS = 24
-        const val MEGABYTE = 1024L * 1024L
-        const val MAX_PATH_CHARS = 40
-        const val AUTOMATIC_NODE = "Automatic"
-        const val LOADING_ITEM = "Loading..."
+
+        // Owned by the model, which also reads them back off the controls.
+        const val AUTOMATIC_NODE = ClaudeAcpPageModel.AUTOMATIC_NODE
+        const val LOADING_ITEM = ClaudeAcpPageModel.LOADING_ITEM
 
         /**
          * Characters before a comment wraps.

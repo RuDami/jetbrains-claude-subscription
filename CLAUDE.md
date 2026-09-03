@@ -28,6 +28,12 @@ version; do not rely on the UI to debounce.
 **Disable controls while busy.** A spinner above live-looking buttons invites the second
 click that caused the duplicate install above.
 
+**Logic that can be wrong belongs in `ClaudeAcpPageModel`, not in the page.** Row labels and
+the code that reads them back, the busy counter, what counts as modified, every bit of
+wording — all of it is plain functions with tests, because the two bugs that shipped from
+this file were exactly there and were only reachable by clicking. When adding a control, put
+its rule in the model and let the Configurable hold Swing.
+
 **Every button must say what it did.** These act on files and a config the user cannot see;
 without a message line, "repaired" and "did nothing" look identical.
 
