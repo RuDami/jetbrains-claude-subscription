@@ -6,8 +6,6 @@ import com.intellij.notification.NotificationType
 import com.intellij.openapi.extensions.PluginId
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.startup.ProjectActivity
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
@@ -24,10 +22,9 @@ class ClaudeAgentProvisioner : ProjectActivity {
         warnAboutConflictingPlugin()
 
         val manager = ClaudeAcpManager.getInstance()
-        // Spawns node and may run npm on a first install — never on the startup thread.
-        withContext(Dispatchers.IO) {
-            manager.provision()
-        }
+        // Spawns node and may run npm on a first install, so it goes to a background task
+        // with a progress bar rather than blocking startup or working invisibly.
+        manager.provisionInBackground(project)
         manager.startUpdateLoop()
     }
 

@@ -7,7 +7,8 @@ import com.intellij.ide.plugins.IdeaPluginDescriptor
  * Takes our entry back out of `acp.json` when the plugin is uninstalled.
  *
  * Without this the agent stays in the picker forever, pointing at a launcher script that
- * a later cleanup may well have deleted.
+ * nothing maintains any more, and the downloaded adapters — a hundred megabytes of
+ * node_modules — sit in the home directory with nothing left to run them.
  */
 class AgentCleanupListener : DynamicPluginListener {
 
@@ -15,7 +16,9 @@ class AgentCleanupListener : DynamicPluginListener {
         if (isUpdate) return
         if (pluginDescriptor.pluginId.idString != PLUGIN_ID) return
 
-        ClaudeAcpManager.getInstance().removeAgentEntry()
+        val manager = ClaudeAcpManager.getInstance()
+        manager.removeAgentEntry()
+        manager.removeAdapterFiles()
     }
 
     private companion object {

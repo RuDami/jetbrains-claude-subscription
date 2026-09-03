@@ -1,0 +1,10 @@
+<idea-plugin>
+  <!-- Loaded only when the JetBrains AI Assistant plugin is present.
+       `agentIconService` is internal AI Assistant API, not a published contract, so it is
+       isolated here: without AI Assistant — or if this extension point is ever renamed —
+       the rest of the plugin still loads and the agent still works, it just falls back to
+       a generic icon. -->
+  <extensions defaultExtensionNs="com.intellij.ml.llm.core.chat.ui">
+    <agentIconService implementation="dev.rudami.claudeacp.ClaudeAgentIconService" order="first"/>
+  </extensions>
+</idea-plugin>

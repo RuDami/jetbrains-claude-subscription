@@ -43,39 +43,41 @@ ACP-адаптер [`@agentclientprotocol/claude-agent-acp`](https://github.com/
 
 ## Настройки
 
-`Settings | Tools | Claude Code ACP Bridge`: политика обновлений (уведомлять / ставить
-молча / не проверять), интервал, пин версии, выбор установленной версии, MCP-флаги,
-явный путь к node, удаление записи из `acp.json`.
+`Settings | Tools | Claude Code ACP Bridge`:
+
+- список установленных версий с активацией любой из них — это же и откат;
+- список всех опубликованных версий из реестра с установкой выбранной;
+- пин версии, политика обновлений (уведомлять / ставить молча / не проверять), интервал;
+- адрес реестра, если npmjs.org недоступен напрямую;
+- MCP-флаги, явный путь к node;
+- удаление записи из `acp.json` и удаление скачанных адаптеров.
 
 ## Установка
 
-Готовый билд лежит в [`dist/`](dist/). `Settings | Plugins | ⚙ | Install Plugin from Disk`,
-выбрать zip, перезапустить IDE. Дальше агент **Claude Code (Subscription)** появится в списке
-AI Chat: Log in → **Claude Subscription**.
+Скачать zip из [Releases](https://github.com/RuDami/jetbrains-claude-subscription/releases),
+дальше `Settings | Plugins | ⚙ | Install Plugin from Disk` и перезапуск IDE. Агент
+**Claude Code (Subscription)** появится в списке AI Chat: Log in → **Claude Subscription**.
 
-Требуется WebStorm (или другая JetBrains IDE) 2026.2 с установленным AI Assistant и
-Node.js 22+ — либо любой свой, либо тот, что IDE скачивает для собственных ACP-агентов.
+Требуется JetBrains IDE 2026.2+ с установленным AI Assistant и Node.js 22+ — либо свой,
+либо тот, что IDE скачивает для собственных ACP-агентов.
 
 ## Сборка
 
 Нужен JDK 21+ — годится JetBrains Runtime из самой IDE. Gradle wrapper в репозитории.
 
 ```bash
-JAVA_HOME=/Applications/WebStorm.app/Contents/jbr/Contents/Home ./gradlew buildPlugin
+./gradlew test buildPlugin
 ```
 
-Артефакт — `build/distributions/claude-code-acp-bridge-<version>.zip`, ставится через
-`Settings | Plugins | ⚙ | Install Plugin from Disk`.
+Артефакт — `build/distributions/claude-code-acp-bridge-<version>.zip`.
 
-Пути в `gradle.properties` под конкретную машину:
+Ничего настраивать не нужно: если в системе есть установленная JetBrains IDE, сборка идёт
+против неё, иначе скачивается опубликованный дистрибутив платформы — поэтому то же самое
+собирается на CI. Единственный кусок внутреннего API, `AgentIconService`, объявлен заглушкой
+в `src/stub` и в jar не попадает: в рантайме класс приходит из AI Assistant.
 
-```properties
-platformLocalPath=/Applications/WebStorm.app/Contents
-aiAssistantPluginPath=~/Library/Application Support/JetBrains/WebStorm2026.2/plugins/ml-llm
-```
-
-AI Assistant не входит в дистрибутив IDE и обновляется отдельно, поэтому
-`bundledPlugin("com.intellij.ml.llm")` не резолвится — только `local()` + `localPlugin()`.
+`./gradlew verifyPlugin` прогоняет официальный Plugin Verifier — тот же, что гоняет
+маркетплейс при загрузке.
 
 ## Проверка
 

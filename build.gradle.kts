@@ -15,58 +15,42 @@ repositories {
     }
 }
 
-/**
- * JetBrains AI Assistant is NOT bundled inside the IDE installation — it is installed per-IDE
- * under the config directory and updates on its own cadence, so `bundledPlugin("com.intellij.ml.llm")`
- * cannot find it. Discovered here rather than hard-coded so the checked-in build carries nobody's
- * home directory; override with `aiAssistantPluginPath` in `gradle.properties` when the guess is wrong.
- */
-fun discoverAiAssistant(): String {
-    val home = File(System.getProperty("user.home"))
-    val configRoots = listOf(
-        File(home, "Library/Application Support/JetBrains"),
-        File(home, ".local/share/JetBrains"),
-        File(home, ".config/JetBrains"),
-    )
-
-    return configRoots
-        .filter { it.isDirectory }
-        .flatMap { it.listFiles()?.toList().orEmpty() }
-        .map { File(it, "plugins/ml-llm") }
-        .filter { File(it, "lib/modules/intellij.ml.llm.chat.jar").isFile }
-        // Newest IDE wins: directory names sort as WebStorm2026.1 < WebStorm2026.2.
-        .maxByOrNull { it.parentFile.parentFile.name }
-        ?.absolutePath
-        ?: error(
-            "Could not find the AI Assistant plugin. Install it in a 2026.2 IDE, or set " +
-                "aiAssistantPluginPath in gradle.properties.",
-        )
-}
-
-fun discoverPlatform(): String =
+fun discoverPlatform(): String? =
     listOf("/Applications/WebStorm.app/Contents", "/Applications/IntelliJ IDEA.app/Contents")
         .map(::File)
         .firstOrNull { it.isDirectory }
         ?.absolutePath
-        ?: error("Could not find a local JetBrains IDE. Set platformLocalPath in gradle.properties.")
 
+/**
+ * Build against a locally installed IDE when there is one — it is already on disk and saves
+ * downloading a gigabyte — and fall back to the published artifact otherwise, which is what
+ * lets this build run on CI. Override with `platformLocalPath` in `gradle.properties`.
+ */
 val platformPath: Provider<String> = providers.gradleProperty("platformLocalPath")
-    .orElse(providers.provider { discoverPlatform() })
+    .orElse(providers.provider { discoverPlatform() ?: "" })
 
-val aiAssistantPath: Provider<String> = providers.gradleProperty("aiAssistantPluginPath")
-    .orElse(providers.provider { discoverAiAssistant() })
+/**
+ * A compileOnly source set holding a stand-in for AI Assistant's `AgentIconService`.
+ *
+ * That interface is internal API: it ships inside a module jar in an IDE installation, not in
+ * any artifact a build can resolve. Depending on a local AI Assistant install made the build
+ * unreproducible and impossible on CI, so the one-method interface is declared locally and
+ * never packaged — the real class arrives at runtime from the AI Assistant plugin.
+ */
+val stub: SourceSet = sourceSets.create("stub")
 
 dependencies {
     intellijPlatform {
-        local(platformPath)
-        localPlugin(aiAssistantPath)
+        val local = platformPath.get()
+        if (local.isNotEmpty()) local(local) else webstorm("2026.2")
     }
 
-    // `AgentIconService` lives in a module jar under the plugin's `lib/modules/`, which is
-    // not on the classpath `localPlugin` contributes. compileOnly by nature: AI Assistant
-    // supplies the class at runtime and `plugin.xml` declares the dependency, so the IDE
-    // refuses to load us without it.
-    compileOnly(files(aiAssistantPath.map { "$it/lib/modules/intellij.ml.llm.chat.jar" }))
+    compileOnly(stub.output)
+    testImplementation(kotlin("test"))
+}
+
+tasks.test {
+    useJUnitPlatform()
 }
 
 // No jvmToolchain(): build on whatever JDK Gradle runs on (the JetBrains Runtime, 25).
@@ -91,13 +75,44 @@ tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach 
 
 intellijPlatform {
     pluginConfiguration {
-        // `AgentIconService` is internal API of the AI Assistant plugin, not a published
-        // contract. Pin to the 262 branch rather than claim untested forward compatibility.
+        // No upper bound. The one piece of internal AI Assistant API this plugin touches —
+        // `AgentIconService` — lives in an optional descriptor now (claude-agent-icon.xml),
+        // so a future IDE that renames or drops it costs the agent its icon rather than the
+        // ability to install. Everything else here is public platform API.
         ideaVersion {
             sinceBuild.set("262")
-            untilBuild.set("262.*")
+            untilBuild.set(provider { null })
         }
+
+        changeNotes.set(
+            """
+            <ul>
+              <li>First release.</li>
+              <li>Installs <code>@agentclientprotocol/claude-agent-acp</code> with npm and
+                  registers it as a local ACP agent without <code>--hide-claude-auth</code>,
+                  so a Claude Pro/Max subscription can be used to log in.</li>
+              <li>Checks the npm registry for adapter updates and installs them without
+                  restarting the IDE; keeps the previous version for rollback.</li>
+              <li>Strips <code>ANTHROPIC_API_KEY</code> and related variables from the agent's
+                  environment so usage is not silently billed to the API.</li>
+            </ul>
+            """.trimIndent(),
+        )
     }
 
     buildSearchableOptions.set(false)
+
+    // JetBrains runs the Plugin Verifier on every Marketplace upload; running it here means
+    // finding out before the upload rather than after. Pinned to one IDE because with no
+    // upper build bound `recommended()` would fetch every release it can find.
+    pluginVerification {
+        ides {
+            select {
+                types.add(org.jetbrains.intellij.platform.gradle.IntelliJPlatformType.WebStorm)
+                channels.add(org.jetbrains.intellij.platform.gradle.models.ProductRelease.Channel.RELEASE)
+                sinceBuild.set("262")
+                untilBuild.set("262.*")
+            }
+        }
+    }
 }

@@ -8,6 +8,7 @@ import com.intellij.util.EnvironmentUtil
 import java.io.File
 import java.nio.file.Path
 import java.nio.file.Paths
+import java.util.concurrent.ConcurrentHashMap
 import kotlin.io.path.isDirectory
 import kotlin.io.path.isExecutable
 import kotlin.io.path.isRegularFile
@@ -117,20 +118,25 @@ object NodeRuntimeResolver {
      * Runs `node -v` once per binary and caches it. Reading the version out of the path
      * only works for the IDE's own runtimes, not for Homebrew or a system install.
      */
-    private fun satisfiesMinimum(node: Path): Boolean = versionCache.getOrPut(node) {
-        val reported = runCatching {
+    private fun satisfiesMinimum(node: Path): Boolean = versionCache.computeIfAbsent(node) {
+        val probed = runCatching {
             val command = GeneralCommandLine(node.toString(), "-v")
             CapturingProcessHandler(command).runProcess(VERSION_TIMEOUT_MS).stdout.trim()
         }.getOrNull()
 
-        val major = reported?.removePrefix("v")?.substringBefore('.')?.toIntOrNull()
-        if (major == null) {
-            LOG.warn("Could not read a version from '$node' (got '$reported'); skipping it")
-            return@getOrPut false
-        }
+        val major = probed?.removePrefix("v")?.substringBefore('.')?.toIntOrNull()
+        when {
+            major == null -> {
+                LOG.warn("Could not read a version from '$node' (got '$probed'); skipping it")
+                false
+            }
 
-        (major >= MINIMUM_MAJOR).also {
-            if (!it) LOG.info("Skipping node $reported at '$node': adapter needs >= $MINIMUM_MAJOR")
+            major < MINIMUM_MAJOR -> {
+                LOG.info("Skipping node $probed at '$node': adapter needs >= $MINIMUM_MAJOR")
+                false
+            }
+
+            else -> true
         }
     }
 
@@ -139,6 +145,8 @@ object NodeRuntimeResolver {
 
     private const val VERSION_TIMEOUT_MS = 5_000
 
-    private val versionCache = mutableMapOf<Path, Boolean>()
+    /** Concurrent because [resolve] is called both from the startup coroutine and from the
+     *  settings dialog on the EDT. */
+    private val versionCache = ConcurrentHashMap<Path, Boolean>()
     private val LOG = logger<NodeRuntimeResolver>()
 }

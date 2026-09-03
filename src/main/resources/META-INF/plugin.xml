@@ -29,7 +29,10 @@
   ]]></description>
 
   <depends>com.intellij.modules.platform</depends>
-  <depends>com.intellij.ml.llm</depends>
+  <!-- Optional so a single internal extension point cannot gate the whole plugin. See
+       claude-agent-icon.xml. The agent itself needs AI Assistant to be of any use, but
+       "installed but idle" beats "refuses to install". -->
+  <depends optional="true" config-file="claude-agent-icon.xml">com.intellij.ml.llm</depends>
 
   <extensions defaultExtensionNs="com.intellij">
     <postStartupActivity implementation="dev.rudami.claudeacp.ClaudeAgentProvisioner"/>
@@ -39,12 +42,6 @@
         parentId="tools"
         instance="dev.rudami.claudeacp.ClaudeAcpConfigurable"
         displayName="Claude Code ACP Bridge"/>
-  </extensions>
-
-  <!-- Internal AI Assistant extension point; see ClaudeAgentIconService for why
-       order="first" matters. -->
-  <extensions defaultExtensionNs="com.intellij.ml.llm.core.chat.ui">
-    <agentIconService implementation="dev.rudami.claudeacp.ClaudeAgentIconService" order="first"/>
   </extensions>
 
   <applicationListeners>

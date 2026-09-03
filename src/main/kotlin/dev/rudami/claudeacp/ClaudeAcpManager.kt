@@ -9,11 +9,13 @@ import com.intellij.notification.NotificationType
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.components.service
 import com.intellij.openapi.diagnostic.logger
+import com.intellij.openapi.util.io.FileUtil
 import com.intellij.openapi.progress.ProgressIndicator
 import com.intellij.openapi.progress.ProgressManager
 import com.intellij.openapi.progress.Task
 import com.intellij.openapi.project.Project
 import com.intellij.util.io.HttpRequests
+import com.intellij.util.io.RequestBuilder
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -87,7 +89,7 @@ class ClaudeAcpManager(private val scope: CoroutineScope) {
         installer.pruneOldVersions()
 
         val launcher = LauncherScript.write(installer.root, runtime, entryPoint)
-        return writeAgentEntry(launcher.toString(), runtime, version)
+        return writeAgentEntry(launcher.toString(), version)
     }
 
     /**
@@ -100,16 +102,16 @@ class ClaudeAcpManager(private val scope: CoroutineScope) {
             ?: installer.installedVersions().firstOrNull()
             ?: latestVersion().getOrNull()
 
-    private fun writeAgentEntry(command: String, runtime: NodeRuntime, version: String): Result<Unit> {
+    private fun writeAgentEntry(command: String, version: String): Result<Unit> {
         dropRenamedEntries()
 
+        // No `env`: the launcher puts node's directory on PATH itself. Writing the IDE's
+        // whole inherited PATH here — which is what this used to do — baked in whatever
+        // ephemeral directories happened to be in the environment of the shell that started
+        // the IDE, and rewrote acp.json every time they changed.
         val entry = JsonObject().apply {
             addProperty("command", command)
             add("args", JsonArray())
-            add(
-                "env",
-                JsonObject().apply { addProperty("PATH", installer.pathWith(runtime)) },
-            )
             addProperty("use_idea_mcp", settings.state.useIdeaMcp)
             addProperty("use_custom_mcp", settings.state.useCustomMcp)
         }
@@ -121,13 +123,19 @@ class ClaudeAcpManager(private val scope: CoroutineScope) {
             }
 
             AcpConfigFile.Outcome.WRITTEN -> {
-                LOG.info("Registered Claude ACP agent $version in ${AcpConfigFile.path} using ${runtime.node}")
-                notify(
-                    NotificationType.INFORMATION,
-                    "Claude Code (Subscription) agent ready",
-                    "Added \"${settings.displayName}\" (adapter $version) to the AI chat agent list. " +
-                        "Pick it there and log in with your Claude subscription.",
-                )
+                LOG.info("Registered Claude ACP agent $version in ${AcpConfigFile.path}")
+
+                // Every adapter update and every node path change rewrites this entry; only
+                // the first one is news.
+                if (!settings.state.announced) {
+                    settings.state.announced = true
+                    notify(
+                        NotificationType.INFORMATION,
+                        "Claude Code (Subscription) agent ready",
+                        "Added \"${settings.displayName}\" (adapter $version) to the AI chat agent list. " +
+                            "Pick it there and log in with your Claude subscription.",
+                    )
+                }
                 Result.success(Unit)
             }
 
@@ -162,6 +170,32 @@ class ClaudeAcpManager(private val scope: CoroutineScope) {
             }
     }
 
+    /**
+     * Runs [provision] under a progress bar.
+     *
+     * A first run downloads the adapter, which takes ten seconds or so; doing that silently
+     * looks like the plugin did nothing.
+     */
+    fun provisionInBackground(project: Project?) {
+        ProgressManager.getInstance().run(
+            object : Task.Backgroundable(project, "Setting up the Claude Code agent", false) {
+                override fun run(indicator: ProgressIndicator) {
+                    provision(indicator)
+                }
+            },
+        )
+    }
+
+    /**
+     * Deletes the downloaded adapters. They are a cache — reinstalling fetches them again —
+     * and node_modules for a couple of versions is a hundred megabytes.
+     */
+    fun removeAdapterFiles() {
+        LOG.info("Removing adapter directory ${installer.root}")
+        runCatching { FileUtil.delete(installer.root.toFile()) }
+        settings.state.installedVersion = null
+    }
+
     fun removeAgentEntry() {
         AcpConfigFile.removeAgent(settings.displayName)
     }
@@ -177,15 +211,38 @@ class ClaudeAcpManager(private val scope: CoroutineScope) {
      * honours the IDE's proxy settings.
      */
     fun latestVersion(): Result<String> = runCatching {
-        val encoded = URLEncoder.encode(ClaudeAcpSettings.PACKAGE_NAME, StandardCharsets.UTF_8)
-        val body = HttpRequests.request("https://registry.npmjs.org/-/package/$encoded/dist-tags")
-            .connectTimeout(HTTP_TIMEOUT_MS)
-            .readTimeout(HTTP_TIMEOUT_MS)
-            .readString()
-
+        val body = fetch("${settings.registry}/-/package/${encodedPackage()}/dist-tags")
         JsonParser.parseString(body).asJsonObject.get("latest")?.asString
             ?: error("registry response has no 'latest' tag")
     }.onFailure { LOG.info("Update check failed: ${it.message}") }
+
+    /**
+     * Every published version, newest first, for the version picker in settings.
+     *
+     * Asks for the abbreviated packument — the full one carries every version's complete
+     * manifest and runs to hundreds of kilobytes.
+     */
+    fun availableVersions(): Result<List<String>> = runCatching {
+        val body = fetch("${settings.registry}/${encodedPackage()}") { request ->
+            request.tuner { it.setRequestProperty("Accept", ABBREVIATED_PACKUMENT) }
+        }
+
+        JsonParser.parseString(body).asJsonObject
+            .getAsJsonObject("versions")
+            .keySet()
+            .sortedWith(VersionOrder.reversed())
+    }.onFailure { LOG.info("Listing versions failed: ${it.message}") }
+
+    private fun encodedPackage(): String =
+        URLEncoder.encode(ClaudeAcpSettings.PACKAGE_NAME, StandardCharsets.UTF_8)
+
+    /** [HttpRequests] rather than a raw client: it honours the IDE's proxy configuration. */
+    private fun fetch(url: String, configure: (RequestBuilder) -> Unit = {}): String =
+        HttpRequests.request(url)
+            .connectTimeout(HTTP_TIMEOUT_MS)
+            .readTimeout(HTTP_TIMEOUT_MS)
+            .also(configure)
+            .readString()
 
     /**
      * @param manual true when the user pressed the button, which means silence is not an
@@ -269,11 +326,18 @@ class ClaudeAcpManager(private val scope: CoroutineScope) {
                     val entryPoint = installed.getOrNull() ?: return
 
                     settings.state.installedVersion = version
-                    settings.state.skippedVersion = null
+
+                    // Activating an older build is a rollback: clearing `skippedVersion`
+                    // here would let tomorrow's check offer back the very version the user
+                    // just walked away from.
+                    val newerOnDisk = installer.installedVersions()
+                        .firstOrNull { VersionOrder.compare(it, version) > 0 }
+                    settings.state.skippedVersion = newerOnDisk
+
                     installer.pruneOldVersions()
 
                     val launcher = LauncherScript.write(installer.root, runtime, entryPoint)
-                    val result = writeAgentEntry(launcher.toString(), runtime, version)
+                    val result = writeAgentEntry(launcher.toString(), version)
 
                     if (result.isSuccess) {
                         notify(
@@ -326,6 +390,7 @@ class ClaudeAcpManager(private val scope: CoroutineScope) {
         const val NOTIFICATION_GROUP: String = "Claude Code ACP Bridge"
 
         private const val HTTP_TIMEOUT_MS = 10_000
+        private const val ABBREVIATED_PACKUMENT = "application/vnd.npm.install-v1+json"
         private val STARTUP_GRACE = 2.minutes
 
         private val LOG = logger<ClaudeAcpManager>()

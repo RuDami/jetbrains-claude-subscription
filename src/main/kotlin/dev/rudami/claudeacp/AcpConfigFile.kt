@@ -27,10 +27,16 @@ object AcpConfigFile {
 
     private val gson = GsonBuilder().setPrettyPrinting().disableHtmlEscaping().create()
 
-    val path: Path = Paths.get(System.getProperty("user.home"), ".jetbrains", "acp.json")
+    /** Overridden by tests so they never touch the real home directory. */
+    @Volatile
+    internal var pathOverride: Path? = null
+
+    val path: Path
+        get() = pathOverride ?: Paths.get(System.getProperty("user.home"), ".jetbrains", "acp.json")
 
     /** Kept as the pristine pre-plugin state — written once and never overwritten. */
-    private val backupPath: Path = path.resolveSibling("acp.json.before-claude-acp-managed")
+    private val backupPath: Path
+        get() = path.resolveSibling("acp.json.before-claude-acp-managed")
 
     enum class Outcome {
         /** The file already held exactly this entry. */

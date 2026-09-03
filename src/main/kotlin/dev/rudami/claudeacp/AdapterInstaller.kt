@@ -5,6 +5,9 @@ import com.intellij.execution.process.CapturingProcessHandler
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.diagnostic.logger
 import com.intellij.openapi.progress.ProgressIndicator
+import java.io.RandomAccessFile
+import java.nio.channels.FileLock
+import java.util.concurrent.ConcurrentHashMap
 import com.intellij.openapi.util.io.FileUtil
 import java.nio.file.Path
 import java.nio.file.Paths
@@ -66,30 +69,43 @@ class AdapterInstaller {
         indicator?.text = "Installing ${ClaudeAcpSettings.PACKAGE_NAME}@$version"
 
         return runCatching {
-            target.createDirectories()
+            withInstallLock {
+                // Another IDE may have installed it while this one waited for the lock.
+                entryPoint(version)?.let { return@withInstallLock it }
 
-            val command = GeneralCommandLine(
-                runtime.node.toString(),
-                runtime.npmCli.toString(),
-                "install",
-                "--no-audit",
-                "--no-fund",
-                "--no-package-lock",
-                "--prefix",
-                target.toString(),
-                "${ClaudeAcpSettings.PACKAGE_NAME}@$version",
-            ).withWorkDirectory(target.toFile())
+                target.createDirectories()
 
-            // npm shells out to node for its own lifecycle helpers.
-            command.environment["PATH"] = pathWith(runtime)
+                val command = GeneralCommandLine(
+                    runtime.node.toString(),
+                    runtime.npmCli.toString(),
+                    "install",
+                    "--no-audit",
+                    "--no-fund",
+                    "--no-package-lock",
+                    // The adapter needs no build step, and this install runs unattended on a
+                    // timer — executing dependencies' lifecycle scripts here buys nothing and
+                    // hands arbitrary code a shell.
+                    "--ignore-scripts",
+                    "--registry",
+                    ClaudeAcpSettings.getInstance().registry,
+                    "--prefix",
+                    target.toString(),
+                    "${ClaudeAcpSettings.PACKAGE_NAME}@$version",
+                ).withWorkDirectory(target.toFile())
 
-            val output = CapturingProcessHandler(command).runProcess(INSTALL_TIMEOUT_MS)
-            if (output.exitCode != 0) {
-                val detail = output.stderr.trim().ifEmpty { output.stdout.trim() }.takeLast(MAX_ERROR_CHARS)
-                error("npm install exited with ${output.exitCode}: $detail")
+                // npm shells out to node for its own helpers, and behind a corporate proxy it
+                // needs the same variables the user's shell has.
+                command.environment["PATH"] = pathWith(runtime)
+                proxyEnvironment().forEach { (key, value) -> command.environment[key] = value }
+
+                val output = CapturingProcessHandler(command).runProcess(INSTALL_TIMEOUT_MS)
+                if (output.exitCode != 0) {
+                    val detail = output.stderr.trim().ifEmpty { output.stdout.trim() }.takeLast(MAX_ERROR_CHARS)
+                    error("npm install exited with ${output.exitCode}: $detail")
+                }
+
+                entryPoint(version) ?: error("npm reported success but $target holds no adapter")
             }
-
-            entryPoint(version) ?: error("npm reported success but $target holds no adapter")
         }.onFailure {
             LOG.warn("Failed to install adapter $version", it)
             runCatching { FileUtil.delete(target.toFile()) }
@@ -102,6 +118,36 @@ class AdapterInstaller {
             LOG.info("Removing superseded adapter version $stale")
             runCatching { FileUtil.delete(versionDir(stale).toFile()) }
         }
+    }
+
+    /**
+     * Serialises installs across processes.
+     *
+     * Two IDEs starting at once would otherwise run npm into the same directory
+     * simultaneously and leave a half-written tree that [entryPoint] happily reports as
+     * usable. An OS file lock is what works across processes; a JVM lock would not.
+     */
+    private fun <T> withInstallLock(body: () -> T): T {
+        root.createDirectories()
+        val lockFile = root.resolve(".install.lock").toFile()
+
+        RandomAccessFile(lockFile, "rw").use { handle ->
+            var lock: FileLock? = null
+            try {
+                lock = handle.channel.lock()
+                return body()
+            } finally {
+                runCatching { lock?.release() }
+            }
+        }
+    }
+
+    /** Proxy variables as the user's shell has them; npm reads these directly. */
+    private fun proxyEnvironment(): Map<String, String> {
+        val environment = com.intellij.util.EnvironmentUtil.getEnvironmentMap()
+        return PROXY_VARIABLES.mapNotNull { name ->
+            environment[name]?.takeIf { it.isNotBlank() }?.let { name to it }
+        }.toMap()
     }
 
     /** `PATH` an npm or adapter child process needs to find its own node. */
@@ -117,6 +163,11 @@ class AdapterInstaller {
         private const val INSTALL_TIMEOUT_MS = 180_000
         private const val MAX_ERROR_CHARS = 800
         private const val KEEP_VERSIONS = 2
+
+        private val PROXY_VARIABLES = listOf(
+            "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY",
+            "http_proxy", "https_proxy", "no_proxy",
+        )
 
         private val LOG = logger<AdapterInstaller>()
 

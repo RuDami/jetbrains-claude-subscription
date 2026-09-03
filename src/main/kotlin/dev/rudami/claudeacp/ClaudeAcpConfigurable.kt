@@ -1,9 +1,11 @@
 package dev.rudami.claudeacp
 
+import com.intellij.openapi.application.invokeLater
 import com.intellij.openapi.options.Configurable
 import com.intellij.openapi.progress.ProgressIndicator
 import com.intellij.openapi.progress.ProgressManager
 import com.intellij.openapi.progress.Task
+import com.intellij.openapi.ui.Messages
 import com.intellij.ui.components.JBCheckBox
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBTextField
@@ -33,6 +35,8 @@ class ClaudeAcpConfigurable : Configurable {
     private val intervalSpinner = JSpinner(SpinnerNumberModel(24, 1, 24 * 14, 1))
     private val pinnedField = JBTextField(14)
     private val nodeField = JBTextField(40)
+    private val registryField = JBTextField(40)
+    private val availableCombo = JComboBox<String>()
     private val manageCheckBox = JBCheckBox("Keep the agent registered in acp.json")
     private val ideaMcpCheckBox = JBCheckBox("Expose the IDE's MCP server to the agent")
     private val customMcpCheckBox = JBCheckBox("Expose your own MCP servers to the agent")
@@ -61,25 +65,47 @@ class ClaudeAcpConfigurable : Configurable {
             }
 
             group("Adapter") {
-                row("Installed versions:") {
+                row("Installed:") {
                     cell(versionCombo)
                     button("Activate Selected") {
                         val chosen = versionCombo.selectedItem as? String
                         if (chosen != null) manager.updateTo(chosen, null) { refreshStatus() }
                     }
                 }.comment(
-                    "Rolling back means activating the older version listed here. The two most " +
-                        "recent installs are kept on disk.",
+                    "Rolling back is activating the older build listed here; the two most recent " +
+                        "installs are kept on disk.",
+                )
+
+                row("In registry:") {
+                    cell(availableCombo)
+                    button("Load Versions") {
+                        inBackground("Listing Claude ACP adapter versions") {
+                            val versions = manager.availableVersions()
+                            invokeLater { showAvailable(versions) }
+                        }
+                    }
+                    button("Install Selected") {
+                        val chosen = availableCombo.selectedItem as? String
+                        if (chosen != null) manager.updateTo(chosen, null) { refreshStatus() }
+                    }
+                }.comment(
+                    "Every published release, newest first. Installing one makes it the active " +
+                        "adapter — the previous build stays on disk.",
                 )
 
                 row("Pin to version:") { cell(pinnedField) }.comment(
-                    "Leave empty to follow the registry. Pinning freezes the adapter and stops " +
+                    "Leave empty to follow the registry. A pin freezes the adapter and silences " +
                         "update prompts — the subscription-auth behaviour lives in this package " +
                         "and can change between releases.",
                 )
 
                 row("When a new version is released:") { cell(policyCombo) }
                 row("Check every (hours):") { cell(intervalSpinner) }
+
+                row("Registry:") { cell(registryField) }.comment(
+                    "Leave empty for ${ClaudeAcpSettings.DEFAULT_REGISTRY}. Set it to a mirror " +
+                        "when npmjs.org is not reachable directly.",
+                )
             }
 
             group("Agent") {
@@ -98,7 +124,15 @@ class ClaudeAcpConfigurable : Configurable {
                         manager.removeAgentEntry()
                         refreshStatus()
                     }
-                }.comment("Other agents and your MCP settings in that file are left untouched.")
+                    button("Delete Downloaded Adapters") {
+                        manager.removeAdapterFiles()
+                        refreshStatus()
+                    }
+                }.comment(
+                    "Other agents and your MCP settings in acp.json are left untouched. Deleting " +
+                        "the adapters frees the node_modules trees under ~/.jetbrains; the next " +
+                        "start downloads the version you need again.",
+                )
             }
         }
     }
@@ -109,6 +143,7 @@ class ClaudeAcpConfigurable : Configurable {
         intervalSpinner.value = state.checkIntervalHours
         pinnedField.text = state.pinnedVersion.orEmpty()
         nodeField.text = state.nodePathOverride.orEmpty()
+        registryField.text = state.registryUrl.orEmpty()
         manageCheckBox.isSelected = state.manageAgent
         ideaMcpCheckBox.isSelected = state.useIdeaMcp
         customMcpCheckBox.isSelected = state.useCustomMcp
@@ -122,6 +157,7 @@ class ClaudeAcpConfigurable : Configurable {
             intervalSpinner.value != state.checkIntervalHours ||
             pinnedField.text.trim() != state.pinnedVersion.orEmpty() ||
             nodeField.text.trim() != state.nodePathOverride.orEmpty() ||
+            registryField.text.trim() != state.registryUrl.orEmpty() ||
             manageCheckBox.isSelected != state.manageAgent ||
             ideaMcpCheckBox.isSelected != state.useIdeaMcp ||
             customMcpCheckBox.isSelected != state.useCustomMcp
@@ -133,6 +169,7 @@ class ClaudeAcpConfigurable : Configurable {
         state.checkIntervalHours = intervalSpinner.value as? Int ?: DEFAULT_INTERVAL_HOURS
         state.pinnedVersion = pinnedField.text.trim().ifEmpty { null }
         state.nodePathOverride = nodeField.text.trim().ifEmpty { null }
+        state.registryUrl = registryField.text.trim().ifEmpty { null }
         state.manageAgent = manageCheckBox.isSelected
         state.useIdeaMcp = ideaMcpCheckBox.isSelected
         state.useCustomMcp = customMcpCheckBox.isSelected
@@ -148,6 +185,20 @@ class ClaudeAcpConfigurable : Configurable {
     private fun syncEnabled() {
         ideaMcpCheckBox.isEnabled = manageCheckBox.isSelected
         customMcpCheckBox.isEnabled = manageCheckBox.isSelected
+    }
+
+    /** Fills the registry combo, or reports why it is empty. */
+    private fun showAvailable(versions: Result<List<String>>) {
+        availableCombo.removeAllItems()
+        versions.onSuccess { list ->
+            list.forEach { availableCombo.addItem(it) }
+            availableCombo.selectedItem = manager.status().installedVersion ?: list.firstOrNull()
+        }.onFailure {
+            Messages.showErrorDialog(
+                "Could not read the version list from the registry.\n\n${it.message}",
+                "Claude Code ACP Bridge",
+            )
+        }
     }
 
     private fun refreshStatus() {

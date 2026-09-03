@@ -60,6 +60,16 @@ class ClaudeAcpSettings : SimplePersistentStateComponent<ClaudeAcpSettings.State
 
         /** Absolute path to a `node` binary, when the automatic search picks the wrong one. */
         var nodePathOverride: String? by string(null)
+
+        /** Non-empty routes npm and the update check at a private registry mirror. */
+        var registryUrl: String? by string(null)
+
+        /**
+         * Set once the agent has been announced. Registering writes `acp.json` again on any
+         * change — a new adapter version, a different node path — and a balloon on each of
+         * those reads as noise; the introduction is only worth making once.
+         */
+        var announced: Boolean by property(false)
     }
 
     val displayName: String get() = state.displayName?.takeIf { it.isNotBlank() } ?: DEFAULT_DISPLAY_NAME
@@ -67,9 +77,13 @@ class ClaudeAcpSettings : SimplePersistentStateComponent<ClaudeAcpSettings.State
     /** The version the plugin should converge on, ignoring what the registry says. */
     val pinnedVersion: String? get() = state.pinnedVersion?.takeIf { it.isNotBlank() }
 
+    /** Registry to install from and to poll for updates. */
+    val registry: String get() = state.registryUrl?.takeIf { it.isNotBlank() } ?: DEFAULT_REGISTRY
+
     companion object {
         const val DEFAULT_DISPLAY_NAME: String = "Claude Code (Subscription)"
         const val PACKAGE_NAME: String = "@agentclientprotocol/claude-agent-acp"
+        const val DEFAULT_REGISTRY: String = "https://registry.npmjs.org"
 
         fun getInstance(): ClaudeAcpSettings = service()
     }
@@ -92,17 +106,38 @@ object ClaudeAgent {
         value.lowercase().filter { it.isLetterOrDigit() }
 }
 
-/** Orders `0.9.0` before `0.73.0`; a plain string sort would not. */
+/**
+ * Orders versions numerically: `0.9.0` before `0.73.0`, which a string sort gets wrong.
+ *
+ * Pre-releases sort *below* the release they lead to — `0.73.0-beta.1` < `0.73.0` — per
+ * semver. Treating every non-numeric segment as 0 in one flat list, as the first cut did,
+ * put the beta above the release and would have offered a downgrade as an update.
+ */
 object VersionOrder : Comparator<String> {
+
     override fun compare(left: String, right: String): Int {
-        val a = left.split('.', '-')
-        val b = right.split('.', '-')
-        for (i in 0 until maxOf(a.size, b.size)) {
-            val x = a.getOrNull(i)?.toIntOrNull() ?: 0
-            val y = b.getOrNull(i)?.toIntOrNull() ?: 0
-            val result = x.compareTo(y)
+        val (leftCore, leftPre) = split(left)
+        val (rightCore, rightPre) = split(right)
+
+        for (i in 0 until maxOf(leftCore.size, rightCore.size)) {
+            val result = (leftCore.getOrNull(i) ?: 0).compareTo(rightCore.getOrNull(i) ?: 0)
             if (result != 0) return result
         }
-        return 0
+
+        // Absent pre-release outranks any pre-release; otherwise compare them as text.
+        return when {
+            leftPre == null && rightPre == null -> 0
+            leftPre == null -> 1
+            rightPre == null -> -1
+            else -> leftPre.compareTo(rightPre)
+        }
+    }
+
+    /** `1.2.3-beta.1` -> ([1, 2, 3], "beta.1"). Build metadata after `+` is ignored. */
+    private fun split(version: String): Pair<List<Int>, String?> {
+        val withoutBuild = version.substringBefore('+')
+        val core = withoutBuild.substringBefore('-')
+        val pre = withoutBuild.substringAfter('-', "").takeIf { it.isNotEmpty() }
+        return core.split('.').map { it.toIntOrNull() ?: 0 } to pre
     }
 }

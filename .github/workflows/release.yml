@@ -1,0 +1,31 @@
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - run: ./gradlew test buildPlugin --stacktrace
+
+      # The zip is built here rather than committed, so the release asset is always the
+      # artifact this tag's source actually produces.
+      - run: gh release create "$GITHUB_REF_NAME" build/distributions/*.zip
+               --title "$GITHUB_REF_NAME"
+               --notes "Install via Settings | Plugins | Install Plugin from Disk."
+        env:
+          GH_TOKEN: ${{ github.token }}
