@@ -96,7 +96,7 @@ class ClaudeAcpManager(private val scope: CoroutineScope) {
         // Order matters. Pruning first would delete the old version while the launcher still
         // points at it, and recording the new version before the launcher is rewritten would
         // leave the settings claiming a version the agent is not actually running.
-        val launcher = LauncherScript.write(installer.root, runtime, entryPoint)
+        val launcher = LauncherScript.write(installer.root, runtime, entryPoint, installer.versionDir(version))
         val result = writeAgentEntry(launcher.toString(), version)
 
         settings.state.installedVersion = version
@@ -377,7 +377,7 @@ class ClaudeAcpManager(private val scope: CoroutineScope) {
                     // running are worse than settings that lag by a moment. Pruning comes
                     // last for the same reason — doing it first deletes the old version
                     // while the launcher still points at it.
-                    val launcher = LauncherScript.write(installer.root, runtime, entryPoint)
+                    val launcher = LauncherScript.write(installer.root, runtime, entryPoint, installer.versionDir(version))
                     val result = writeAgentEntry(launcher.toString(), version)
 
                     settings.state.installedVersion = version

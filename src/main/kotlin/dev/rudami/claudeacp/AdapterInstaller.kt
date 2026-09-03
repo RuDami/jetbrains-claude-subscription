@@ -133,7 +133,9 @@ class AdapterInstaller {
      * Best effort: `commandLine()` is unavailable for other users' processes and commonly
      * empty on Windows, so this can under-report and never over-reports.
      */
-    fun versionsInUse(): Set<String> {
+    fun versionsInUse(): Set<String> = fromCommandLines() + fromMarkers()
+
+    private fun fromCommandLines(): Set<String> {
         val prefix = versionsRoot.toString() + File.separator
 
         return runCatching {
@@ -146,6 +148,28 @@ class AdapterInstaller {
         }.getOrElse {
             LOG.info("Could not inspect running processes: ${it.message}")
             emptySet()
+        }
+    }
+
+    /**
+     * Versions whose launcher left a live marker behind.
+     *
+     * Command lines are the better source where they are readable, but they are unavailable
+     * for other users' processes and commonly empty on Windows — which turned the guard into
+     * no guard at all there. Each marker is named by the pid the launcher runs as, so a
+     * marker whose pid is gone is stale and swept.
+     */
+    private fun fromMarkers(): Set<String> = installedVersions().filterTo(mutableSetOf()) { version ->
+        val markers = runCatching {
+            versionDir(version).listDirectoryEntries("${LauncherScript.MARKER_PREFIX}*")
+        }.getOrElse { emptyList() }
+
+        markers.any { marker ->
+            val pid = marker.name.removePrefix(LauncherScript.MARKER_PREFIX).toLongOrNull()
+            val alive = pid != null && ProcessHandle.of(pid).isPresent
+
+            if (!alive) runCatching { Files.deleteIfExists(marker) }
+            alive
         }
     }
 

@@ -3,6 +3,7 @@ package dev.rudami.claudeacp
 import com.google.gson.GsonBuilder
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
+import java.io.RandomAccessFile
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
@@ -52,15 +53,15 @@ object AcpConfigFile {
 
     /** Stores [entry] under [name], leaving every other key intact. */
     @Synchronized
-    fun upsertAgent(name: String, entry: JsonObject): Outcome {
-        val root = read() ?: return Outcome.REFUSED_UNPARSEABLE
+    fun upsertAgent(name: String, entry: JsonObject): Outcome = withFileLock {
+        val root = read() ?: return@withFileLock Outcome.REFUSED_UNPARSEABLE
         val servers = root.getAsJsonObject(AGENT_SERVERS) ?: JsonObject().also { root.add(AGENT_SERVERS, it) }
 
-        if (servers.getAsJsonObject(name) == entry) return Outcome.UNCHANGED
+        if (servers.getAsJsonObject(name) == entry) return@withFileLock Outcome.UNCHANGED
 
         servers.add(name, entry)
         write(root)
-        return Outcome.WRITTEN
+        Outcome.WRITTEN
     }
 
     /**
@@ -102,13 +103,42 @@ object AcpConfigFile {
 
     /** Drops our entry, leaving the rest of the file alone. */
     @Synchronized
-    fun removeAgent(name: String): Outcome {
-        val root = read() ?: return Outcome.REFUSED_UNPARSEABLE
-        val servers = root.getAsJsonObject(AGENT_SERVERS) ?: return Outcome.UNCHANGED
-        if (servers.remove(name) == null) return Outcome.UNCHANGED
+    fun removeAgent(name: String): Outcome = withFileLock {
+        val root = read() ?: return@withFileLock Outcome.REFUSED_UNPARSEABLE
+        val servers = root.getAsJsonObject(AGENT_SERVERS) ?: return@withFileLock Outcome.UNCHANGED
+        if (servers.remove(name) == null) return@withFileLock Outcome.UNCHANGED
 
         write(root)
-        return Outcome.WRITTEN
+        Outcome.WRITTEN
+    }
+
+    /**
+     * Serialises read-modify-write across processes.
+     *
+     * `@Synchronized` only covers this JVM, and two IDEs running at once both provision on
+     * startup: each reads the file, each writes it back, and the later write drops whatever
+     * the other added in between. Same-name entries make that invisible, but two IDEs with
+     * different plugin versions — so different agent names — would delete each other's entry
+     * on every launch.
+     *
+     * The lock lives in a separate file, since the target is replaced by a move and a lock on
+     * a replaced inode protects nothing. Failing to take it is not fatal: a best-effort write
+     * beats refusing to configure the agent at all.
+     */
+    private fun <T> withFileLock(body: () -> T): T {
+        val lockFile = path.resolveSibling(path.fileName.toString() + ".lock")
+        runCatching { lockFile.createParentDirectories() }
+
+        return runCatching {
+            RandomAccessFile(lockFile.toFile(), "rw").use { handle ->
+                val lock = handle.channel.lock()
+                try {
+                    body()
+                } finally {
+                    runCatching { lock.release() }
+                }
+            }
+        }.getOrElse { body() }
     }
 
     /**

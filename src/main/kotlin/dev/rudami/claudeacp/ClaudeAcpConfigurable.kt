@@ -75,10 +75,14 @@ class ClaudeAcpConfigurable : Configurable {
      */
     private var busyCount = 0
 
+    /** Set once the page is closed; see [onUi]. */
+    private var disposed = false
+
     override fun getDisplayName(): String = "Claude Code ACP Bridge"
 
     override fun createComponent(): JComponent {
         managedControls.clear()
+        disposed = false
 
         return panel {
             row("Status:") {
@@ -116,7 +120,7 @@ class ClaudeAcpConfigurable : Configurable {
                         inBackground("Repairing the Claude Code agent", "Repairing the installation") {
                             val result = manager.provision()
                             reloadVersions(refresh = false)
-                            invokeLater {
+                            onUi {
                                 if (result.isSuccess) {
                                     showInfo(
                                         "Repaired. Adapter " +
@@ -231,9 +235,23 @@ class ClaudeAcpConfigurable : Configurable {
      * late arrival from repainting components nobody is looking at.
      */
     override fun disposeUIResources() {
+        disposed = true
         managedControls.clear()
         lastStatus = null
         busyCount = 0
+    }
+
+    /**
+     * Applies [body] on the EDT unless the page is gone.
+     *
+     * A background task cannot be cancelled once the dialog closes, so it finishes and tries
+     * to repaint components nobody is looking at — harmless today, but it also re-enables
+     * controls and rewrites labels on a page the platform may reuse.
+     */
+    private fun onUi(body: () -> Unit) {
+        onUi {
+            if (!disposed) body()
+        }
     }
 
     override fun isModified(): Boolean {
@@ -249,7 +267,14 @@ class ClaudeAcpConfigurable : Configurable {
 
     override fun apply() {
         val state = settings.state
-        state.updatePolicy = policyCombo.selectedItem as? UpdatePolicy ?: UpdatePolicy.NOTIFY
+
+        // Skipping is a decision about one release under one policy. Changing the policy is
+        // a decision about updates in general, and leaving the skip in place meant the
+        // version skipped under "notify me" stayed invisible after switching to automatic.
+        val chosenPolicy = policyCombo.selectedItem as? UpdatePolicy ?: UpdatePolicy.NOTIFY
+        if (chosenPolicy != state.updatePolicy) state.skippedVersion = null
+
+        state.updatePolicy = chosenPolicy
         state.checkIntervalHours = intervalSpinner.value as? Int ?: DEFAULT_INTERVAL_HOURS
         state.registryUrl = registryChoice()
         state.nodePathOverride = nodeChoice()
@@ -264,7 +289,7 @@ class ClaudeAcpConfigurable : Configurable {
             // duplicate request.
             manager.updateTo(desired, null) {
                 reloadVersions(refresh = false)
-                invokeLater { endBusy() }
+                onUi { endBusy() }
             }
         } else {
             inBackground("Applying Claude Code agent settings", "Applying settings") {
@@ -301,7 +326,7 @@ class ClaudeAcpConfigurable : Configurable {
             inBackground("Removing the Claude Code agent", "Removing the agent") {
                 manager.removeAgentEntry()
                 manager.removeAdapterFiles()
-                invokeLater {
+                onUi {
                     versionCombo.removeAllItems()
                     diskLabel.text = "nothing downloaded"
                 }
@@ -351,25 +376,25 @@ class ClaudeAcpConfigurable : Configurable {
                 .filter { it != active }
                 .map { AdapterCleanupDialog.VersionEntry(it, installer.diskUsage(it)) }
 
-            invokeLater {
+            onUi {
                 if (removable.isEmpty()) {
                     Messages.showInfoMessage(
                         "Every adapter on disk is in use — by the active agent or by a chat " +
                             "that is still open.",
                         "Claude Code ACP Bridge",
                     )
-                    return@invokeLater
+                    return@onUi
                 }
 
                 val dialog = AdapterCleanupDialog(active, removable, busy)
-                if (!dialog.showAndGet()) return@invokeLater
+                if (!dialog.showAndGet()) return@onUi
 
                 val chosen = dialog.selected
                 val force = dialog.forced
                 inBackground("Deleting Claude ACP adapters", "Deleting adapters") {
                     val removed = manager.removeVersions(chosen, force)
                     reloadVersions(refresh = false)
-                    invokeLater {
+                    onUi {
                         Messages.showInfoMessage(
                             "Removed " + removed.joinToString() + ".",
                             "Claude Code ACP Bridge",
@@ -430,7 +455,7 @@ class ClaudeAcpConfigurable : Configurable {
     private fun loadDetectedNodes() {
         val detected = NodeRuntimeResolver.detectAll().map { it.toString() }
 
-        invokeLater {
+        onUi {
             val existing = (0 until nodeCombo.itemCount).mapNotNull { nodeCombo.getItemAt(it) }
             detected.filterNot { it in existing }.forEach { nodeCombo.addItem(it) }
         }
@@ -490,7 +515,7 @@ class ClaudeAcpConfigurable : Configurable {
         // this background thread rather than riding along with the label update on the EDT.
         val summary = describeDisk(installed.size, manager.diskUsage())
 
-        invokeLater {
+        onUi {
             versionCombo.removeAllItems()
             rows.forEach { versionCombo.addItem(it) }
             rows.firstOrNull { it.substringBefore(' ') == active }
@@ -630,7 +655,7 @@ class ClaudeAcpConfigurable : Configurable {
                     try {
                         body()
                     } finally {
-                        if (busy != null) invokeLater { endBusy() }
+                        if (busy != null) onUi { endBusy() }
                     }
                 }
             },
