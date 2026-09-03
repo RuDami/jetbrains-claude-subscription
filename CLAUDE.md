@@ -124,3 +124,22 @@ The point of the plugin is one absent flag: the adapter must be launched **witho
 `--hide-claude-auth`. With it, `claude-ai-login` disappears from `authMethods` and any account
 with a `subscriptionType` is rejected at session start. `test/handshake.sh` exists to catch
 that regression.
+
+## Kotlin gotcha
+
+Block comments nest in Kotlin. A glob such as a slash followed by a star inside a KDoc
+opens a nested comment, and everything to the end of the file becomes part of it — the
+compiler reports "unclosed comment" at the last line, nowhere near the cause.
+
+## Claude Code settings
+
+`.claude/settings.json` and `.claude/settings.local.json` belong to the user and to Claude
+Code, not to this plugin. Merge the keys being edited and leave the rest — those files also
+carry hooks, MCP servers and environment settings. Refuse to write when the file does not
+parse. `ClaudeSettingsFileTest` covers it.
+
+Distinguish an absent key from an empty array: for `availableModels`, absent means every
+model and `[]` means only the default one.
+
+An escalating `permissions.defaultMode` coming from a repo-committed source is filtered out
+by the CLI's trust policy, so it has to be set in personal settings to take effect.

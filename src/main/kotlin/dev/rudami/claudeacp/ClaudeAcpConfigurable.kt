@@ -123,13 +123,15 @@ class ClaudeAcpConfigurable : Configurable {
                             "the agent entry. Use it when the agent stops appearing in the chat.",
                     )
 
+                }
+
+                // Its own row. Three buttons abreast set the panel's minimum width, and the
+                // sentence explaining all three set it again — the tooltips say the same
+                // thing without costing any width at all.
+                row {
                     button("Free Up Space") { openCleanupDialog() }
                         .explain("Choose which downloaded adapters to delete.")
-                }.comment(
-                    "Check looks for a newer release. Repair fixes an agent that stopped " +
-                        "working. Free Up Space deletes adapters you no longer run.",
-                    COMMENT_WRAP,
-                )
+                }
             }
 
             group("Updates") {
