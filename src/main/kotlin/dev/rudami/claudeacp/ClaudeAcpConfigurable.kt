@@ -45,10 +45,7 @@ class ClaudeAcpConfigurable : Configurable {
 
     /** Spinner and error line, so a slow registry looks like waiting rather than nothing. */
     private val busyIcon = AsyncProcessIcon("claude-acp-loading").apply { isVisible = false }
-    private val errorLabel = JBLabel().apply {
-        foreground = JBColor.RED
-        isVisible = false
-    }
+    private val messageLabel = JBLabel().apply { isVisible = false }
 
     private val versionCombo = ComboBox<String>()
     private val policyCombo = ComboBox(UpdatePolicy.entries.toTypedArray())
@@ -56,7 +53,9 @@ class ClaudeAcpConfigurable : Configurable {
     private val registryCombo = ComboBox(ClaudeAcpSettings.KNOWN_REGISTRIES.toTypedArray()).apply {
         isEditable = true
     }
-    private val nodeCombo = ComboBox<String>().apply { isEditable = true }
+    // Not editable: "Automatic" is a sentinel, and letting it be typed over meant a
+    // half-deleted word became a node path. Custom interpreters arrive through Browse.
+    private val nodeCombo = ComboBox<String>()
     private val ideaMcpCheckBox = JBCheckBox("Expose the IDE's MCP server to the agent")
     private val customMcpCheckBox = JBCheckBox("Expose your own MCP servers to the agent")
 
@@ -75,7 +74,7 @@ class ClaudeAcpConfigurable : Configurable {
                 cell(statusLabel).align(AlignX.FILL)
             }
 
-            row { cell(errorLabel).align(AlignX.FILL) }
+            row { cell(messageLabel).align(AlignX.FILL) }
 
             row {
                 toggleButton = button("") { toggleAgent() }.component
@@ -94,22 +93,42 @@ class ClaudeAcpConfigurable : Configurable {
                 }
 
                 row {
-                    button("Clean Up") { openCleanupDialog() }.managed()
                     button("Check for Updates") {
                         beginBusy("Checking the registry")
                         inBackground("Checking for Claude ACP adapter updates") {
                             manager.checkForUpdates(manual = true)
-                            reloadVersions(refresh = true)
+                            reloadVersions(refresh = true, report = true)
                         }
-                    }.managed()
-                    button("Reinstall") {
-                        beginBusy("Reinstalling the adapter")
-                        inBackground("Reprovisioning the Claude Code agent") {
-                            manager.provision()
+                    }.explain("Asks the registry whether a newer adapter has been published.")
+
+                    button("Repair") {
+                        beginBusy("Repairing the installation")
+                        inBackground("Repairing the Claude Code agent") {
+                            val result = manager.provision()
                             reloadVersions(refresh = false)
+                            invokeLater {
+                                if (result.isSuccess) {
+                                    showInfo(
+                                        "Repaired. Adapter " +
+                                            (manager.status().installedVersion ?: "unknown") +
+                                            " is installed and the agent is registered.",
+                                    )
+                                } else {
+                                    showError("Repair failed. See the IDE log for details.")
+                                }
+                            }
                         }
-                    }.managed()
-                }
+                    }.explain(
+                        "Re-downloads the current adapter if its files are missing and rewrites " +
+                            "the agent entry. Use it when the agent stops appearing in the chat.",
+                    )
+
+                    button("Free Up Space") { openCleanupDialog() }
+                        .explain("Choose which downloaded adapters to delete.")
+                }.comment(
+                    "Check looks for a newer release. Repair fixes an agent that stopped " +
+                        "working. Free Up Space deletes adapters you no longer run.",
+                )
             }
 
             group("Updates") {
@@ -165,6 +184,12 @@ class ClaudeAcpConfigurable : Configurable {
     private fun <T : JComponent> Cell<T>.managed(): Cell<T> {
         managedControls += component
         return this
+    }
+
+    /** A tooltip plus [managed], since every explained control here is also a managed one. */
+    private fun <T : JComponent> Cell<T>.explain(text: String): Cell<T> {
+        component.toolTipText = text
+        return managed()
     }
 
     // ---------------------------------------------------------------- Configurable
@@ -325,8 +350,12 @@ class ClaudeAcpConfigurable : Configurable {
         val start = nodeChoice()?.let { LocalFileSystem.getInstance().findFileByPath(it) }
 
         FileChooser.chooseFile(descriptor, null, start) { chosen ->
+            // The chooser can return an interpreter the scan never found, so it is added to
+            // the list rather than merely selected.
+            if ((0 until nodeCombo.itemCount).none { nodeCombo.getItemAt(it) == chosen.path }) {
+                nodeCombo.addItem(chosen.path)
+            }
             nodeCombo.selectedItem = chosen.path
-            nodeCombo.editor.item = chosen.path
         }
     }
 
@@ -339,9 +368,7 @@ class ClaudeAcpConfigurable : Configurable {
             ?.takeIf { it.isNotEmpty() && it != ClaudeAcpSettings.DEFAULT_REGISTRY }
 
     private fun nodeChoice(): String? =
-        (nodeCombo.editor.item as? String)
-            ?.trim()
-            ?.takeIf { it.isNotEmpty() && it != AUTOMATIC_NODE }
+        (nodeCombo.selectedItem as? String)?.takeIf { it != AUTOMATIC_NODE }
 
     /**
      * Lists what the machine has, with the default spelled out rather than left blank.
@@ -360,7 +387,10 @@ class ClaudeAcpConfigurable : Configurable {
     }
 
     private fun selectedVersion(): String? =
-        (versionCombo.selectedItem as? String)?.substringBefore(' ')?.takeIf { it.isNotBlank() }
+        (versionCombo.selectedItem as? String)
+            ?.takeIf { it != LOADING_ITEM }
+            ?.substringBefore(' ')
+            ?.takeIf { it.isNotBlank() }
 
     private fun versionChanged(): Boolean {
         if (!settings.state.manageAgent) return false
@@ -374,7 +404,7 @@ class ClaudeAcpConfigurable : Configurable {
         toggleButton.text = if (managed) "Remove Agent" else "Add Agent"
     }
 
-    private fun reloadVersions(refresh: Boolean) {
+    private fun reloadVersions(refresh: Boolean, report: Boolean = false) {
         invokeLater { beginBusy("Loading adapter versions") }
 
         val installed = installer.installedVersions()
@@ -405,10 +435,13 @@ class ClaudeAcpConfigurable : Configurable {
             diskLabel.text = summary
 
             endBusy()
-            if (fetched.isFailure) {
+            when {
                 // Not fatal: what is already downloaded still runs, and the list falls back
                 // to it. Saying so beats a combo that is silently short.
-                showError("Could not reach the registry. Showing downloaded versions only.")
+                fetched.isFailure ->
+                    showError("Could not reach the registry. Showing downloaded versions only.")
+
+                report -> showInfo(describeFreshness(published.firstOrNull(), active))
             }
         }
     }
@@ -421,22 +454,51 @@ class ClaudeAcpConfigurable : Configurable {
      * page sits there empty. The spinner and this label are the only sign it is working.
      */
     private fun beginBusy(message: String) {
-        errorLabel.isVisible = false
+        messageLabel.isVisible = false
         busyIcon.isVisible = true
         busyIcon.resume()
         statusLabel.text = message + "..."
         statusLabel.toolTipText = null
+
+        // The controls say it too. A spinner at the top of a page whose buttons still look
+        // clickable invites a second click, which is how the same install got requested and
+        // announced twice.
+        managedControls.forEach { it.isEnabled = false }
+        toggleButton.isEnabled = false
+
+        if (versionCombo.itemCount == 0) versionCombo.addItem(LOADING_ITEM)
     }
 
     private fun endBusy() {
         busyIcon.suspend()
         busyIcon.isVisible = false
+        toggleButton.isEnabled = true
+        syncManaged()
         refreshStatus()
     }
 
-    private fun showError(message: String) {
-        errorLabel.text = message
-        errorLabel.isVisible = true
+    private fun showError(message: String) = showMessage(message, JBColor.RED)
+
+    private fun showInfo(message: String) = showMessage(message, JBLabel().foreground)
+
+    /**
+     * Says what an action did.
+     *
+     * Every button here works on files and a config the user cannot see, so without a line
+     * like this the only difference between "repaired" and "did nothing" is that the dialog
+     * closed.
+     */
+    private fun showMessage(message: String, color: java.awt.Color) {
+        messageLabel.text = message
+        messageLabel.foreground = color
+        messageLabel.isVisible = true
+    }
+
+    private fun describeFreshness(newest: String?, active: String?): String = when {
+        newest == null -> "The registry returned no versions."
+        active == null -> "Newest release is " + newest + ". Nothing is installed yet."
+        VersionOrder.compare(newest, active) > 0 -> "Update available: " + newest + "."
+        else -> "Up to date on " + active + "."
     }
 
     private fun describeDisk(versions: Int, bytes: Long): String = when (versions) {
@@ -484,5 +546,6 @@ class ClaudeAcpConfigurable : Configurable {
         const val MEGABYTE = 1024L * 1024L
         const val MAX_PATH_CHARS = 40
         const val AUTOMATIC_NODE = "Automatic"
+        const val LOADING_ITEM = "Loading..."
     }
 }
