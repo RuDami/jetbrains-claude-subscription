@@ -123,6 +123,7 @@ with.
 | Registry | Known mirrors, editable — a private Nexus or Artifactory can be typed in. |
 | MCP | Whether the agent sees the IDE's MCP server and your own MCP servers. |
 | Node.js | Interpreters found on this machine, or browse for one. |
+| Name in the chat list | What the agent is called. The IDE derives its id from this, so renaming starts a fresh agent — the model and permission mode remembered for the old name do not follow, and the old entry is removed. |
 | Add / Remove Agent | Removes the entry from `acp.json`, deletes the downloaded adapters and disables the page. Add turns it all back on. |
 | Restore Defaults | Newest adapter, public registry, automatic interpreter. |
 
@@ -252,6 +253,14 @@ WebStorm · Agent Client Protocol · ACP agent JetBrains · claude-agent-acp · 
 without API key in IDE · `--hide-claude-auth` · claude.ai subscription not supported ·
 JetBrains AI Assistant custom agent · acp.json · Claude Code in PhpStorm, PyCharm, GoLand,
 RubyMine, CLion, Rider, DataGrip
+
+## Attribution
+
+`icons/claude.svg` is Anthropic's Claude mark, taken from the official Claude Code JetBrains
+plugin so the agent is visually recognisable in the chat list. This project is a personal
+integration tool, not affiliated with or endorsed by Anthropic or JetBrains, and the mark
+remains Anthropic's. The plugin's own icon — the one shown for the plugin itself — is not
+Anthropic's and was drawn for this project.
 
 ## License
 

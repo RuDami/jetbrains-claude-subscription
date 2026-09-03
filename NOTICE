@@ -2,6 +2,11 @@ This plugin is derived from
   https://github.com/vanssata/jetbrains-claude-subscription
 Copyright (c) vanssa, MIT License (see LICENSE).
 
+icons/claude.svg is Anthropic's Claude mark, taken from the official Claude Code JetBrains
+plugin so the agent is visually recognisable in the chat list. The mark remains Anthropic's;
+this project is a personal integration tool and claims no rights to it. The plugin's own
+icon, META-INF/pluginIcon.svg, was drawn for this project and is not Anthropic's.
+
 Reused with modifications:
   src/main/kotlin/dev/rudami/claudeacp/AcpConfigFile.kt
   src/main/kotlin/dev/rudami/claudeacp/ClaudeAgentIconService.kt

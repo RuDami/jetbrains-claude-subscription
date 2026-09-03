@@ -79,6 +79,26 @@ class ClaudeAcpPageModelTest {
     }
 
     @Test
+    fun `a blank agent name falls back to the default`() {
+        assertEquals(ClaudeAcpSettings.DEFAULT_DISPLAY_NAME, ClaudeAcpPageModel.displayName(""))
+        assertEquals(ClaudeAcpSettings.DEFAULT_DISPLAY_NAME, ClaudeAcpPageModel.displayName("   "))
+        assertEquals(ClaudeAcpSettings.DEFAULT_DISPLAY_NAME, ClaudeAcpPageModel.displayName(null))
+        assertEquals("Claude", ClaudeAcpPageModel.displayName("  Claude  "))
+    }
+
+    /**
+     * The name is what the icon service matches against, so a rename must still resolve to
+     * the id the IDE derives from it.
+     */
+    @Test
+    fun `the derived agent id still matches after a rename`() {
+        val renamed = ClaudeAcpPageModel.displayName("Claude Code Personal")
+
+        assertTrue(ClaudeAgent.matches("acp.claude-code-personal", renamed))
+        assertFalse(ClaudeAgent.matches("acp.something-else", renamed))
+    }
+
+    @Test
     fun `automatic is stored as no node override`() {
         assertNull(ClaudeAcpPageModel.nodeChoice(ClaudeAcpPageModel.AUTOMATIC_NODE))
         assertEquals("/usr/bin/node", ClaudeAcpPageModel.nodeChoice("/usr/bin/node"))
@@ -88,6 +108,7 @@ class ClaudeAcpPageModelTest {
 
     private val stored = ClaudeAcpPageModel.Form(
         version = "0.73.0",
+        displayName = ClaudeAcpSettings.DEFAULT_DISPLAY_NAME,
         policy = UpdatePolicy.NOTIFY,
         intervalHours = 24,
         registry = null,
@@ -105,6 +126,7 @@ class ClaudeAcpPageModelTest {
     fun `each field counts as a change`() {
         val changes = listOf(
             stored.copy(version = "0.72.0"),
+            stored.copy(displayName = "Claude"),
             stored.copy(policy = UpdatePolicy.AUTO),
             stored.copy(intervalHours = 12),
             stored.copy(registry = "https://registry.npmmirror.com"),

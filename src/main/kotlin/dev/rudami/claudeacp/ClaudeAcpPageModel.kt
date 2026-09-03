@@ -21,6 +21,7 @@ object ClaudeAcpPageModel {
     /** Every field the page can change, as one value that can be compared and copied. */
     data class Form(
         val version: String?,
+        val displayName: String,
         val policy: UpdatePolicy,
         val intervalHours: Int,
         val registry: String?,
@@ -31,6 +32,7 @@ object ClaudeAcpPageModel {
 
     fun formOf(state: ClaudeAcpSettings.State): Form = Form(
         version = state.installedVersion,
+        displayName = displayName(state.displayName),
         policy = state.updatePolicy,
         intervalHours = state.checkIntervalHours,
         registry = state.registryUrl,
@@ -38,6 +40,10 @@ object ClaudeAcpPageModel {
         useIdeaMcp = state.useIdeaMcp,
         useCustomMcp = state.useCustomMcp,
     )
+
+    /** Blank falls back to the default rather than registering a nameless agent. */
+    fun displayName(text: String?): String =
+        text?.trim()?.takeIf { it.isNotEmpty() } ?: ClaudeAcpSettings.DEFAULT_DISPLAY_NAME
 
     /**
      * Whether [edited] asks for anything [stored] does not already say.

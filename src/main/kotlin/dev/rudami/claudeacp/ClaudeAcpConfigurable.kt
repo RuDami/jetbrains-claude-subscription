@@ -13,6 +13,7 @@ import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.ui.JBColor
 import com.intellij.ui.components.JBCheckBox
 import com.intellij.ui.components.JBLabel
+import com.intellij.ui.components.JBTextField
 import com.intellij.ui.dsl.builder.AlignX
 import com.intellij.ui.dsl.builder.Cell
 import com.intellij.ui.dsl.builder.panel
@@ -56,6 +57,7 @@ class ClaudeAcpConfigurable : Configurable {
     // Not editable: "Automatic" is a sentinel, and letting it be typed over meant a
     // half-deleted word became a node path. Custom interpreters arrive through Browse.
     private val nodeCombo = ComboBox<String>()
+    private val nameField = JBTextField()
     private val ideaMcpCheckBox = JBCheckBox("Expose the IDE's MCP server to the agent")
     private val customMcpCheckBox = JBCheckBox("Expose your own MCP servers to the agent")
 
@@ -170,6 +172,18 @@ class ClaudeAcpConfigurable : Configurable {
             }
 
             group("Agent") {
+                row("Name in the chat list:") {
+                    cell(nameField)
+                        .align(AlignX.FILL)
+                        .comment(
+                            "The IDE derives the agent's id from this, so renaming it starts " +
+                                "a fresh agent: the model and permission mode remembered for " +
+                                "the old name do not follow. The old entry is removed.",
+                            COMMENT_WRAP,
+                        )
+                        .managed()
+                }
+
                 row { cell(ideaMcpCheckBox).managed() }
                 row { cell(customMcpCheckBox).managed() }
 
@@ -217,6 +231,7 @@ class ClaudeAcpConfigurable : Configurable {
         policyCombo.selectedItem = state.updatePolicy
         intervalSpinner.value = state.checkIntervalHours
         registryCombo.selectedItem = state.registryUrl ?: ClaudeAcpSettings.DEFAULT_REGISTRY
+        nameField.text = settings.displayName
         ideaMcpCheckBox.isSelected = state.useIdeaMcp
         customMcpCheckBox.isSelected = state.useCustomMcp
         fillDetectedNodes(state.nodePathOverride)
@@ -263,6 +278,7 @@ class ClaudeAcpConfigurable : Configurable {
     /** What the controls currently say, in the shape the model compares. */
     private fun currentForm() = ClaudeAcpPageModel.Form(
         version = selectedVersion(),
+        displayName = ClaudeAcpPageModel.displayName(nameField.text),
         policy = policyCombo.selectedItem as? UpdatePolicy ?: UpdatePolicy.NOTIFY,
         intervalHours = intervalSpinner.value as? Int ?: DEFAULT_INTERVAL_HOURS,
         registry = registryChoice(),
@@ -286,6 +302,12 @@ class ClaudeAcpConfigurable : Configurable {
         state.nodePathOverride = nodeChoice()
         state.useIdeaMcp = ideaMcpCheckBox.isSelected
         state.useCustomMcp = customMcpCheckBox.isSelected
+
+        // Provisioning sweeps entries this plugin wrote under a name it no longer uses, so
+        // the rename leaves one agent in the list rather than two.
+        val renamed = ClaudeAcpPageModel.displayName(nameField.text)
+        if (renamed != settings.displayName) state.announced = false
+        state.displayName = renamed
 
         val desired = selectedVersion()
         if (versionChanged() && desired != null) {
