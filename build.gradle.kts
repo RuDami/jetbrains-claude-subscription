@@ -6,7 +6,7 @@ plugins {
 }
 
 group = "dev.rudami"
-version = "0.1.0"
+version = "0.2.0"
 
 repositories {
     mavenCentral()
@@ -86,8 +86,19 @@ intellijPlatform {
 
         changeNotes.set(
             """
+            <b>0.2.0</b>
             <ul>
-              <li>First release.</li>
+              <li>Pick any published adapter version from a list and switch to it; older
+                  builds stay on disk, so choosing one is a rollback.</li>
+              <li>A settings page for the project's Claude Code permissions — allow, ask and
+                  deny rules and the default mode. Rules approved in the chat are merged
+                  rather than overwritten.</li>
+              <li>Add and remove the agent outright, choose the Node.js interpreter from the
+                  ones found on the machine, and point npm at a mirror.</li>
+            </ul>
+
+            <b>0.1.0</b>
+            <ul>
               <li>Installs <code>@agentclientprotocol/claude-agent-acp</code> with npm and
                   registers it as a local ACP agent without <code>--hide-claude-auth</code>,
                   so a Claude Pro/Max subscription can be used to log in.</li>

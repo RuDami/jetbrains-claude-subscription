@@ -3,6 +3,13 @@ name: release
 on:
   push:
     tags: ['v*']
+  # A tag pushed before this workflow existed on the default branch never fired it, and
+  # re-pushing a tag is not a way to ask again. This makes the release runnable by hand.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag to publish
+        required: true
 
 permissions:
   contents: write
@@ -12,6 +19,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # A manual run checks out the tag it was asked to publish, so the asset is built
+          # from that source rather than from whatever the default branch holds now.
+          ref: ${{ inputs.tag || github.ref }}
 
       - uses: actions/setup-java@v4
         with:
@@ -23,9 +34,13 @@ jobs:
       - run: ./gradlew test buildPlugin --stacktrace
 
       # The zip is built here rather than committed, so the release asset is always the
-      # artifact this tag's source actually produces.
-      - run: gh release create "$GITHUB_REF_NAME" build/distributions/*.zip
-               --title "$GITHUB_REF_NAME"
-               --notes "Install via Settings | Plugins | Install Plugin from Disk."
+      # artifact this tag's source actually produces. `create || upload --clobber` makes a
+      # re-run replace the asset instead of failing on an existing release.
+      - run: |
+          gh release create "$TAG" build/distributions/*.zip \
+            --title "$TAG" \
+            --notes "Install via Settings | Plugins | Install Plugin from Disk." \
+          || gh release upload "$TAG" build/distributions/*.zip --clobber
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag || github.ref_name }}
