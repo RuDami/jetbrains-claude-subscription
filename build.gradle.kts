@@ -6,7 +6,7 @@ plugins {
 }
 
 group = "dev.rudami"
-version = "0.2.2"
+version = "0.2.3"
 
 repositories {
     mavenCentral()
@@ -86,6 +86,12 @@ intellijPlatform {
 
         changeNotes.set(
             """
+            <b>0.2.3</b>
+            <ul>
+              <li>The agent can be renamed from the settings page; the old entry is removed
+                  for you.</li>
+            </ul>
+
             <b>0.2.2</b>
             <ul>
               <li>Switching adapter version can no longer collide with the check that runs at
