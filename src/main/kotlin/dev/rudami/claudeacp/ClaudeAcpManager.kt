@@ -22,6 +22,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.net.URLEncoder
+import java.util.concurrent.ConcurrentHashMap
 import java.nio.charset.StandardCharsets
 import kotlin.time.Duration.Companion.hours
 import kotlin.time.Duration.Companion.minutes
@@ -41,6 +42,9 @@ class ClaudeAcpManager(private val scope: CoroutineScope) {
     /** The registry list is stable enough that reopening settings need not refetch it. */
     @Volatile
     private var cachedVersions: List<String>? = null
+
+    /** Versions with an install running, so a repeated request is not honoured twice. */
+    private val installsInFlight = ConcurrentHashMap.newKeySet<String>()
 
     /** Human-readable state for the settings page. */
     data class Status(val installedVersion: String?, val nodePath: String?, val agentRegistered: Boolean)
@@ -310,11 +314,31 @@ class ClaudeAcpManager(private val scope: CoroutineScope) {
             .notify(null)
     }
 
-    /** Installs [version], repoints the launcher at it and refreshes `acp.json`. */
+    /**
+     * Installs [version], repoints the launcher at it and refreshes `acp.json`.
+     *
+     * A second request for a version already being installed is dropped. The settings page
+     * decides whether to switch by comparing against the installed version, which does not
+     * change until this background task finishes — so pressing Apply and then OK asked for
+     * the same install twice and announced it twice.
+     */
     fun updateTo(version: String, project: Project?, onFinished: (Result<Unit>) -> Unit = {}) {
+        if (!installsInFlight.add(version)) {
+            LOG.info("Install of $version already running; ignoring the repeat request")
+            return
+        }
+
         ProgressManager.getInstance().run(
             object : Task.Backgroundable(project, "Installing Claude ACP adapter $version", true) {
                 override fun run(indicator: ProgressIndicator) {
+                    try {
+                        install(indicator)
+                    } finally {
+                        installsInFlight.remove(version)
+                    }
+                }
+
+                private fun install(indicator: ProgressIndicator) {
                     val runtime = NodeRuntimeResolver.resolve()
                     if (runtime == null) {
                         notifyNoNode()

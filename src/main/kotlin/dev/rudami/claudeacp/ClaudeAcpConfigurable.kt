@@ -1,14 +1,17 @@
 package dev.rudami.claudeacp
 
 import com.intellij.openapi.application.invokeLater
+import com.intellij.openapi.fileChooser.FileChooser
+import com.intellij.openapi.fileChooser.FileChooserDescriptorFactory
+import com.intellij.openapi.ui.ComboBox
 import com.intellij.openapi.options.Configurable
 import com.intellij.openapi.progress.ProgressIndicator
 import com.intellij.openapi.progress.ProgressManager
 import com.intellij.openapi.progress.Task
 import com.intellij.openapi.ui.Messages
+import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.ui.components.JBCheckBox
 import com.intellij.ui.components.JBLabel
-import com.intellij.ui.components.JBTextField
 import com.intellij.ui.dsl.builder.AlignX
 import com.intellij.ui.dsl.builder.panel
 import javax.swing.JComboBox
@@ -40,8 +43,10 @@ class ClaudeAcpConfigurable : Configurable {
     private val versionCombo = JComboBox<String>()
     private val policyCombo = JComboBox(UpdatePolicy.entries.toTypedArray())
     private val intervalSpinner = JSpinner(SpinnerNumberModel(24, 1, 24 * 14, 1))
-    private val registryField = JBTextField()
-    private val nodeField = JBTextField()
+    private val registryCombo = ComboBox(ClaudeAcpSettings.KNOWN_REGISTRIES.toTypedArray()).apply {
+        isEditable = true
+    }
+    private val nodeCombo = ComboBox<String>().apply { isEditable = true }
     private val manageCheckBox = JBCheckBox("Keep the agent registered in acp.json")
     private val ideaMcpCheckBox = JBCheckBox("Expose the IDE's MCP server to the agent")
     private val customMcpCheckBox = JBCheckBox("Expose your own MCP servers to the agent")
@@ -99,9 +104,9 @@ class ClaudeAcpConfigurable : Configurable {
                 }
 
                 row("Registry:") {
-                    cell(registryField)
+                    cell(registryCombo)
                         .align(AlignX.FILL)
-                        .comment("Empty uses the public npm registry.")
+                        .comment("Pick one or type a mirror. Empty uses the public registry.")
                 }
             }
 
@@ -114,10 +119,11 @@ class ClaudeAcpConfigurable : Configurable {
                 row { cell(customMcpCheckBox) }
 
                 row("Node.js:") {
-                    cell(nodeField)
+                    cell(nodeCombo)
                         .align(AlignX.FILL)
-                        .comment("Empty searches PATH, then the IDE's own runtimes. Needs Node " +
-                            NodeRuntimeResolver.MINIMUM_MAJOR + "+.")
+                        .comment("Detected interpreters, or browse for one. Empty picks " +
+                            "automatically. Needs Node " + NodeRuntimeResolver.MINIMUM_MAJOR + "+.")
+                    button("Browse...") { browseForNode() }
                 }
 
                 row {
@@ -134,8 +140,8 @@ class ClaudeAcpConfigurable : Configurable {
         val state = settings.state
         policyCombo.selectedItem = state.updatePolicy
         intervalSpinner.value = state.checkIntervalHours
-        registryField.text = state.registryUrl.orEmpty()
-        nodeField.text = state.nodePathOverride.orEmpty()
+        registryCombo.selectedItem = state.registryUrl.orEmpty()
+        fillDetectedNodes(state.nodePathOverride.orEmpty())
         manageCheckBox.isSelected = state.manageAgent
         ideaMcpCheckBox.isSelected = state.useIdeaMcp
         customMcpCheckBox.isSelected = state.useCustomMcp
@@ -152,8 +158,8 @@ class ClaudeAcpConfigurable : Configurable {
         return versionChanged() ||
             policyCombo.selectedItem != state.updatePolicy ||
             intervalSpinner.value != state.checkIntervalHours ||
-            registryField.text.trim() != state.registryUrl.orEmpty() ||
-            nodeField.text.trim() != state.nodePathOverride.orEmpty() ||
+            registryText() != state.registryUrl.orEmpty() ||
+            nodeText() != state.nodePathOverride.orEmpty() ||
             manageCheckBox.isSelected != state.manageAgent ||
             ideaMcpCheckBox.isSelected != state.useIdeaMcp ||
             customMcpCheckBox.isSelected != state.useCustomMcp
@@ -163,8 +169,8 @@ class ClaudeAcpConfigurable : Configurable {
         val state = settings.state
         state.updatePolicy = policyCombo.selectedItem as? UpdatePolicy ?: UpdatePolicy.NOTIFY
         state.checkIntervalHours = intervalSpinner.value as? Int ?: DEFAULT_INTERVAL_HOURS
-        state.registryUrl = registryField.text.trim().ifEmpty { null }
-        state.nodePathOverride = nodeField.text.trim().ifEmpty { null }
+        state.registryUrl = registryText().ifEmpty { null }
+        state.nodePathOverride = nodeText().ifEmpty { null }
         state.manageAgent = manageCheckBox.isSelected
         state.useIdeaMcp = ideaMcpCheckBox.isSelected
         state.useCustomMcp = customMcpCheckBox.isSelected
@@ -222,6 +228,36 @@ class ClaudeAcpConfigurable : Configurable {
                     }
                 }
             }
+        }
+    }
+
+    private fun registryText(): String = (registryCombo.editor.item as? String).orEmpty().trim()
+
+    private fun nodeText(): String = (nodeCombo.editor.item as? String).orEmpty().trim()
+
+    /**
+     * Offers what the machine actually has, the way the IDE's own interpreter fields do,
+     * with [current] kept even when the scan does not turn it up.
+     */
+    private fun fillDetectedNodes(current: String) {
+        nodeCombo.removeAllItems()
+        nodeCombo.addItem("")
+
+        val detected = NodeRuntimeResolver.detectAll().map { it.toString() }
+        (detected + current).filter { it.isNotBlank() }.distinct().forEach { nodeCombo.addItem(it) }
+        nodeCombo.selectedItem = current
+    }
+
+    /** The IDE's own file chooser, so a path can be found rather than remembered. */
+    private fun browseForNode() {
+        val descriptor = FileChooserDescriptorFactory.singleFile()
+            .withTitle("Select Node.js Interpreter")
+        val start = nodeText().takeIf { it.isNotBlank() }
+            ?.let { LocalFileSystem.getInstance().findFileByPath(it) }
+
+        FileChooser.chooseFile(descriptor, null, start) { chosen ->
+            nodeCombo.selectedItem = chosen.path
+            nodeCombo.editor.item = chosen.path
         }
     }
 

@@ -79,6 +79,16 @@ class ClaudeAcpSettings : SimplePersistentStateComponent<ClaudeAcpSettings.State
         const val PACKAGE_NAME: String = "@agentclientprotocol/claude-agent-acp"
         const val DEFAULT_REGISTRY: String = "https://registry.npmjs.org"
 
+        /**
+         * Offered in settings so the common cases are a choice rather than a URL typed from
+         * memory. The field stays editable — a company mirror is nobody's preset.
+         */
+        val KNOWN_REGISTRIES: List<String> = listOf(
+            DEFAULT_REGISTRY,
+            "https://registry.npmmirror.com",
+            "https://registry.yarnpkg.com",
+        )
+
         fun getInstance(): ClaudeAcpSettings = service()
     }
 }

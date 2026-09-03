@@ -41,6 +41,19 @@ object NodeRuntimeResolver {
     fun resolve(): NodeRuntime? =
         fromOverride() ?: fromUserPath() ?: fromIdeRuntimes()
 
+    /**
+     * Every usable node this machine offers, best candidate first.
+     *
+     * [resolve] stops at the first hit because that is all the agent needs; the settings
+     * page offers the rest so choosing a different one does not mean typing a path from
+     * memory.
+     */
+    fun detectAll(): List<Path> {
+        val fromPath = userPathEntries().mapNotNull { runCatching { runtimeAt(it) }.getOrNull() }
+        val fromIde = ideRuntimeBinDirs().mapNotNull { runCatching { runtimeAt(it) }.getOrNull() }
+        return (fromPath + fromIde).map { it.node }.distinct()
+    }
+
     private fun fromOverride(): NodeRuntime? {
         val configured = ClaudeAcpSettings.getInstance().state.nodePathOverride?.takeIf { it.isNotBlank() }
             ?: return null
@@ -55,16 +68,17 @@ object NodeRuntimeResolver {
      * from Finder or the Dock inherits a bare `/usr/bin:/bin:/usr/sbin:/sbin` with no
      * Homebrew and no nvm on it, while this map comes from a login shell.
      */
-    private fun fromUserPath(): NodeRuntime? {
+    private fun fromUserPath(): NodeRuntime? =
+        userPathEntries().firstNotNullOfOrNull { runCatching { runtimeAt(it) }.getOrNull() }
+
+    private fun userPathEntries(): List<Path> {
         val path = EnvironmentUtil.getEnvironmentMap()["PATH"]
             ?: System.getenv("PATH")
-            ?: return null
+            ?: return emptyList()
 
-        return path.splitToSequence(File.pathSeparatorChar)
+        return path.split(File.pathSeparatorChar)
             .filter { it.isNotBlank() }
             .map { Paths.get(it) }
-            .mapNotNull { runCatching { runtimeAt(it) }.getOrNull() }
-            .firstOrNull()
     }
 
     /**
@@ -72,14 +86,17 @@ object NodeRuntimeResolver {
      * node version picks, say, a 2026.1 runtime while running under 2026.2 — which then
      * breaks the agent the moment those caches are cleaned up.
      */
-    private fun fromIdeRuntimes(): NodeRuntime? {
+    private fun fromIdeRuntimes(): NodeRuntime? =
+        ideRuntimeBinDirs().firstNotNullOfOrNull { runCatching { runtimeAt(it) }.getOrNull() }
+
+    private fun ideRuntimeBinDirs(): List<Path> {
         val current = runtimeRootsUnder(PathManager.getSystemDir())
         val others = ideCacheRoots()
             .flatMap { it.childDirectories() }
             .filter { it != PathManager.getSystemDir() }
             .flatMap { runtimeRootsUnder(it) }
 
-        return (current + others).firstNotNullOfOrNull { runCatching { runtimeAt(it) }.getOrNull() }
+        return current + others
     }
 
     /** Version directories under one IDE's `acp-agents/.runtimes/node`, newest first. */
