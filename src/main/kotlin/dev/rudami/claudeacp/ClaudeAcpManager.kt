@@ -267,6 +267,9 @@ class ClaudeAcpManager(private val scope: CoroutineScope) {
      *   acceptable answer — "already up to date" and failures are reported too.
      */
     fun checkForUpdates(manual: Boolean) {
+        // Nothing runs the adapter while the agent is removed, so offering to upgrade it is
+        // an interruption about software the user has already opted out of.
+        if (!settings.state.manageAgent) return
         if (!manual && settings.state.updatePolicy == UpdatePolicy.OFF) return
 
         val latest = latestVersion().getOrElse { failure ->

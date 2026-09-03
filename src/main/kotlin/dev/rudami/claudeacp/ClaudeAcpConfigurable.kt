@@ -3,18 +3,19 @@ package dev.rudami.claudeacp
 import com.intellij.openapi.application.invokeLater
 import com.intellij.openapi.fileChooser.FileChooser
 import com.intellij.openapi.fileChooser.FileChooserDescriptorFactory
-import com.intellij.openapi.ui.ComboBox
 import com.intellij.openapi.options.Configurable
 import com.intellij.openapi.progress.ProgressIndicator
 import com.intellij.openapi.progress.ProgressManager
 import com.intellij.openapi.progress.Task
+import com.intellij.openapi.ui.ComboBox
 import com.intellij.openapi.ui.Messages
 import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.ui.components.JBCheckBox
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.dsl.builder.AlignX
+import com.intellij.ui.dsl.builder.Cell
 import com.intellij.ui.dsl.builder.panel
-import javax.swing.JComboBox
+import javax.swing.JButton
 import javax.swing.JComponent
 import javax.swing.JSpinner
 import javax.swing.SpinnerNumberModel
@@ -24,13 +25,12 @@ import javax.swing.SpinnerNumberModel
  *
  * Plain components rather than the UI DSL's `bind*` helpers: applying a change here has to
  * rewrite `acp.json` as a side effect, so the apply step is explicit anyway, and hand-held
- * state keeps the "what is installed right now" label refreshable after the buttons run.
+ * state keeps the live labels refreshable after the buttons run.
  *
- * Two layout rules worth keeping. Every field is `AlignX.FILL`, so the panel follows the
- * dialog instead of sizing itself to its widest label. And every explanation is a cell
- * comment with an explicit wrap width: comments default to growing the panel to fit their
- * longest line, which shoves the labelled fields leftward and makes the dialog unreadable
- * at any window size.
+ * Two layout rules worth keeping. Every field is `AlignX.FILL` and sits alone on its row, so
+ * the panel follows the dialog instead of splitting a row's width with a button. And no
+ * comment or label may contain a path or a URL: neither has a space to wrap at, so each one
+ * sets a floor under the panel's width and produces a horizontal scrollbar at any size.
  */
 class ClaudeAcpConfigurable : Configurable {
 
@@ -40,54 +40,59 @@ class ClaudeAcpConfigurable : Configurable {
 
     private val statusLabel = JBLabel()
     private val diskLabel = JBLabel()
-    private val versionCombo = JComboBox<String>()
-    private val policyCombo = JComboBox(UpdatePolicy.entries.toTypedArray())
+
+    private val versionCombo = ComboBox<String>()
+    private val policyCombo = ComboBox(UpdatePolicy.entries.toTypedArray())
     private val intervalSpinner = JSpinner(SpinnerNumberModel(24, 1, 24 * 14, 1))
     private val registryCombo = ComboBox(ClaudeAcpSettings.KNOWN_REGISTRIES.toTypedArray()).apply {
         isEditable = true
     }
     private val nodeCombo = ComboBox<String>().apply { isEditable = true }
-    private val manageCheckBox = JBCheckBox("Keep the agent registered in acp.json")
     private val ideaMcpCheckBox = JBCheckBox("Expose the IDE's MCP server to the agent")
     private val customMcpCheckBox = JBCheckBox("Expose your own MCP servers to the agent")
+
+    /** Everything that is meaningless while no agent is installed. */
+    private val managedControls = mutableListOf<JComponent>()
+    private lateinit var toggleButton: JButton
 
     override fun getDisplayName(): String = "Claude Code ACP Bridge"
 
     override fun createComponent(): JComponent {
-        manageCheckBox.addActionListener { syncEnabled() }
+        managedControls.clear()
 
         return panel {
-            row("Status:") {
-                cell(statusLabel).align(AlignX.FILL)
+            row("Status:") { cell(statusLabel).align(AlignX.FILL) }
+
+            row {
+                toggleButton = button("") { toggleAgent() }.component
             }
 
             group("Adapter") {
                 row("Version:") {
                     cell(versionCombo)
                         .align(AlignX.FILL)
-                        .comment("Pick one and press OK to switch. An older build is a rollback.")
+                        .comment("Newest first. Pick one and press OK to switch.")
+                        .managed()
                 }
 
                 row("Downloaded:") {
-                    cell(diskLabel)
-                        .align(AlignX.FILL)
-                        .comment("Clean Up never removes the copy in use.")
-                    button("Clean Up") { openCleanupDialog() }
+                    cell(diskLabel).align(AlignX.FILL)
                 }
 
                 row {
+                    button("Clean Up") { openCleanupDialog() }.managed()
                     button("Check for Updates") {
                         inBackground("Checking for Claude ACP adapter updates") {
                             manager.checkForUpdates(manual = true)
                             reloadVersions(refresh = true)
                         }
-                    }
+                    }.managed()
                     button("Reinstall") {
                         inBackground("Reprovisioning the Claude Code agent") {
                             manager.provision()
                             reloadVersions(refresh = false)
                         }
-                    }
+                    }.managed()
                 }
             }
 
@@ -96,60 +101,69 @@ class ClaudeAcpConfigurable : Configurable {
                     cell(policyCombo)
                         .align(AlignX.FILL)
                         .comment("Updates can change how subscription login behaves.")
+                        .managed()
                 }
 
                 row("Check every:") {
-                    cell(intervalSpinner)
+                    cell(intervalSpinner).managed()
                     label("hours")
                 }
 
                 row("Registry:") {
                     cell(registryCombo)
                         .align(AlignX.FILL)
-                        .comment("Pick one or type a mirror. Empty uses the public registry.")
+                        .comment("Pick a mirror or type your own.")
+                        .managed()
                 }
             }
 
             group("Agent") {
-                row {
-                    cell(manageCheckBox)
-                        .comment("Turn off to edit the ACP config by hand.")
-                }
-                row { cell(ideaMcpCheckBox) }
-                row { cell(customMcpCheckBox) }
+                row { cell(ideaMcpCheckBox).managed() }
+                row { cell(customMcpCheckBox).managed() }
 
+                // The field owns its row. Sharing one with the browse button squeezed the
+                // combo down to a stub too narrow to read a path in.
                 row("Node.js:") {
                     cell(nodeCombo)
                         .align(AlignX.FILL)
-                        .comment("Detected interpreters, or browse for one. Empty picks " +
-                            "automatically. Needs Node " + NodeRuntimeResolver.MINIMUM_MAJOR + "+.")
-                    button("Browse...") { browseForNode() }
+                        .comment(
+                            "Detected interpreters. Automatic searches PATH, then the IDE's " +
+                                "own runtimes. Needs Node " +
+                                NodeRuntimeResolver.MINIMUM_MAJOR + " or newer.",
+                        )
+                        .managed()
                 }
 
                 row {
-                    button("Remove Agent from acp.json") {
-                        manager.removeAgentEntry()
-                        refreshStatus()
-                    }
+                    button("Browse...") { browseForNode() }.managed()
                 }
+            }
+
+            row {
+                button("Restore Defaults") { restoreDefaults() }.managed()
             }
         }
     }
+
+    /** Marks a control as one to switch off while no agent is installed. */
+    private fun <T : JComponent> Cell<T>.managed(): Cell<T> {
+        managedControls += component
+        return this
+    }
+
+    // ---------------------------------------------------------------- Configurable
 
     override fun reset() {
         val state = settings.state
         policyCombo.selectedItem = state.updatePolicy
         intervalSpinner.value = state.checkIntervalHours
-        registryCombo.selectedItem = state.registryUrl.orEmpty()
-        fillDetectedNodes(state.nodePathOverride.orEmpty())
-        manageCheckBox.isSelected = state.manageAgent
+        registryCombo.selectedItem = state.registryUrl ?: ClaudeAcpSettings.DEFAULT_REGISTRY
         ideaMcpCheckBox.isSelected = state.useIdeaMcp
         customMcpCheckBox.isSelected = state.useCustomMcp
-        syncEnabled()
-        refreshStatus()
+        fillDetectedNodes(state.nodePathOverride)
 
-        // Fill the list without being asked. A version picker that starts empty until a
-        // button is pressed is just a button.
+        syncManaged()
+        refreshStatus()
         inBackground("Listing Claude ACP adapter versions") { reloadVersions(refresh = false) }
     }
 
@@ -158,9 +172,8 @@ class ClaudeAcpConfigurable : Configurable {
         return versionChanged() ||
             policyCombo.selectedItem != state.updatePolicy ||
             intervalSpinner.value != state.checkIntervalHours ||
-            registryText() != state.registryUrl.orEmpty() ||
-            nodeText() != state.nodePathOverride.orEmpty() ||
-            manageCheckBox.isSelected != state.manageAgent ||
+            registryChoice() != state.registryUrl ||
+            nodeChoice() != state.nodePathOverride ||
             ideaMcpCheckBox.isSelected != state.useIdeaMcp ||
             customMcpCheckBox.isSelected != state.useCustomMcp
     }
@@ -169,14 +182,11 @@ class ClaudeAcpConfigurable : Configurable {
         val state = settings.state
         state.updatePolicy = policyCombo.selectedItem as? UpdatePolicy ?: UpdatePolicy.NOTIFY
         state.checkIntervalHours = intervalSpinner.value as? Int ?: DEFAULT_INTERVAL_HOURS
-        state.registryUrl = registryText().ifEmpty { null }
-        state.nodePathOverride = nodeText().ifEmpty { null }
-        state.manageAgent = manageCheckBox.isSelected
+        state.registryUrl = registryChoice()
+        state.nodePathOverride = nodeChoice()
         state.useIdeaMcp = ideaMcpCheckBox.isSelected
         state.useCustomMcp = customMcpCheckBox.isSelected
 
-        // Switching version is an install; everything else just needs the entry rewritten
-        // for the change to reach the agent.
         val desired = selectedVersion()
         if (versionChanged() && desired != null) {
             manager.updateTo(desired, null) { reloadVersions(refresh = false) }
@@ -188,15 +198,71 @@ class ClaudeAcpConfigurable : Configurable {
         }
     }
 
-    private fun versionChanged(): Boolean {
-        val desired = selectedVersion() ?: return false
-        return desired != manager.status().installedVersion
+    // ---------------------------------------------------------------- actions
+
+    /**
+     * Adds or removes the agent outright.
+     *
+     * Removing used to take the entry out of the config and change nothing anyone could
+     * see: the next apply or the next startup put it straight back, so the button looked
+     * broken. It now switches the whole feature off — entry gone, downloads deleted, page
+     * disabled — and Add turns it back on. That is the only reading of "remove" that
+     * survives contact with a plugin which reprovisions on every start.
+     */
+    private fun toggleAgent() {
+        val state = settings.state
+
+        if (state.manageAgent) {
+            val confirmed = Messages.showYesNoDialog(
+                "Remove the agent from the chat list and delete the downloaded adapters?",
+                "Claude Code ACP Bridge",
+                Messages.getQuestionIcon(),
+            )
+            if (confirmed != Messages.YES) return
+
+            state.manageAgent = false
+            syncManaged()
+            inBackground("Removing the Claude Code agent") {
+                manager.removeAgentEntry()
+                manager.removeAdapterFiles()
+                invokeLater {
+                    versionCombo.removeAllItems()
+                    diskLabel.text = "nothing downloaded"
+                    refreshStatus()
+                }
+            }
+        } else {
+            state.manageAgent = true
+            state.announced = false
+            syncManaged()
+            inBackground("Setting up the Claude Code agent") {
+                manager.provision()
+                reloadVersions(refresh = false)
+            }
+        }
     }
 
     /**
-     * Sizing every version walks its node_modules, so the list is built off the EDT and the
-     * dialog only opens once it has something to show.
+     * Back to what a fresh install would have: newest adapter, public registry, automatic
+     * interpreter, notify on updates.
+     *
+     * "Automatic" rather than the project's configured Node.js: reading that means depending
+     * on the NodeJS plugin, which is absent from several IDEs that speak ACP, and the
+     * automatic search already prefers the interpreter a project would use — the one on
+     * your PATH.
      */
+    private fun restoreDefaults() {
+        policyCombo.selectedItem = UpdatePolicy.NOTIFY
+        intervalSpinner.value = DEFAULT_INTERVAL_HOURS
+        registryCombo.selectedItem = ClaudeAcpSettings.DEFAULT_REGISTRY
+        ideaMcpCheckBox.isSelected = true
+        customMcpCheckBox.isSelected = true
+        fillDetectedNodes(null)
+
+        // reloadVersions sorts descending, so the first row is the newest release.
+        if (versionCombo.itemCount > 0) versionCombo.selectedIndex = 0
+    }
+
     private fun openCleanupDialog() {
         inBackground("Measuring downloaded Claude ACP adapters") {
             val active = manager.status().installedVersion
@@ -231,29 +297,10 @@ class ClaudeAcpConfigurable : Configurable {
         }
     }
 
-    private fun registryText(): String = (registryCombo.editor.item as? String).orEmpty().trim()
-
-    private fun nodeText(): String = (nodeCombo.editor.item as? String).orEmpty().trim()
-
-    /**
-     * Offers what the machine actually has, the way the IDE's own interpreter fields do,
-     * with [current] kept even when the scan does not turn it up.
-     */
-    private fun fillDetectedNodes(current: String) {
-        nodeCombo.removeAllItems()
-        nodeCombo.addItem("")
-
-        val detected = NodeRuntimeResolver.detectAll().map { it.toString() }
-        (detected + current).filter { it.isNotBlank() }.distinct().forEach { nodeCombo.addItem(it) }
-        nodeCombo.selectedItem = current
-    }
-
-    /** The IDE's own file chooser, so a path can be found rather than remembered. */
     private fun browseForNode() {
         val descriptor = FileChooserDescriptorFactory.singleFile()
             .withTitle("Select Node.js Interpreter")
-        val start = nodeText().takeIf { it.isNotBlank() }
-            ?.let { LocalFileSystem.getInstance().findFileByPath(it) }
+        val start = nodeChoice()?.let { LocalFileSystem.getInstance().findFileByPath(it) }
 
         FileChooser.chooseFile(descriptor, null, start) { chosen ->
             nodeCombo.selectedItem = chosen.path
@@ -261,18 +308,50 @@ class ClaudeAcpConfigurable : Configurable {
         }
     }
 
-    /** The version behind the selected row, without its status decoration. */
+    // ---------------------------------------------------------------- state helpers
+
+    /** Null when the default is chosen, so stored settings hold an override or nothing. */
+    private fun registryChoice(): String? =
+        (registryCombo.editor.item as? String)
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() && it != ClaudeAcpSettings.DEFAULT_REGISTRY }
+
+    private fun nodeChoice(): String? =
+        (nodeCombo.editor.item as? String)
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() && it != AUTOMATIC_NODE }
+
+    /**
+     * Lists what the machine has, with the default spelled out rather than left blank.
+     *
+     * A blank field means "something was chosen for you", which is invisible — an unset
+     * field and a broken one look identical. The first entry says so in words, and the
+     * status line above shows what it resolved to.
+     */
+    private fun fillDetectedNodes(current: String?) {
+        nodeCombo.removeAllItems()
+        nodeCombo.addItem(AUTOMATIC_NODE)
+
+        val detected = NodeRuntimeResolver.detectAll().map { it.toString() }
+        (detected + listOfNotNull(current)).distinct().forEach { nodeCombo.addItem(it) }
+        nodeCombo.selectedItem = current ?: AUTOMATIC_NODE
+    }
+
     private fun selectedVersion(): String? =
         (versionCombo.selectedItem as? String)?.substringBefore(' ')?.takeIf { it.isNotBlank() }
 
-    /**
-     * Rebuilds the version list from the registry, falling back to whatever is on disk when
-     * it cannot be reached.
-     *
-     * The two sources are merged rather than shown side by side: "installed" and "available"
-     * are one list with a column of extra information, and two separate combo boxes left the
-     * user to work out which one to use.
-     */
+    private fun versionChanged(): Boolean {
+        if (!settings.state.manageAgent) return false
+        val desired = selectedVersion() ?: return false
+        return desired != manager.status().installedVersion
+    }
+
+    private fun syncManaged() {
+        val managed = settings.state.manageAgent
+        managedControls.forEach { it.isEnabled = managed }
+        toggleButton.text = if (managed) "Remove Agent" else "Add Agent"
+    }
+
     private fun reloadVersions(refresh: Boolean) {
         val installed = installer.installedVersions()
         val published = manager.availableVersions(refresh).getOrNull().orEmpty()
@@ -283,45 +362,43 @@ class ClaudeAcpConfigurable : Configurable {
             .sortedWith(VersionOrder.reversed())
             .map { version ->
                 when {
-                    version == active -> "$version — active"
-                    version in installed -> "$version — downloaded"
+                    version == active -> version + " - active"
+                    version in installed -> version + " - downloaded"
                     else -> version
                 }
             }
 
-        // Walking a couple of node_modules trees is thousands of stat calls; it belongs on
-        // the caller's background thread, not on the EDT with the label update.
+        // Walking a couple of node_modules trees is thousands of stat calls, so it stays on
+        // this background thread rather than riding along with the label update on the EDT.
         val summary = describeDisk(installed.size, manager.diskUsage())
 
         invokeLater {
             versionCombo.removeAllItems()
             rows.forEach { versionCombo.addItem(it) }
-            rows.firstOrNull { it.substringBefore(' ') == active }?.let { versionCombo.selectedItem = it }
+            rows.firstOrNull { it.substringBefore(' ') == active }
+                ?.let { versionCombo.selectedItem = it }
             diskLabel.text = summary
             refreshStatus()
         }
     }
 
     private fun describeDisk(versions: Int, bytes: Long): String = when (versions) {
-        0 -> "nothing downloaded yet"
-        else -> {
-            val copies = if (versions == 1) "1 copy" else "$versions copies"
-            "$copies, ${bytes / MEGABYTE} MB"
-        }
-    }
-
-    private fun syncEnabled() {
-        ideaMcpCheckBox.isEnabled = manageCheckBox.isSelected
-        customMcpCheckBox.isEnabled = manageCheckBox.isSelected
+        0 -> "nothing downloaded"
+        1 -> "1 copy, " + (bytes / MEGABYTE) + " MB"
+        else -> versions.toString() + " copies, " + (bytes / MEGABYTE) + " MB"
     }
 
     /**
-     * A label is as wide as its text wants to be, and an absolute path to a node binary has
-     * no spaces to wrap at — printing one here stretched the whole dialog and put a
-     * horizontal scrollbar under it. The path is shortened for display and kept in full in
-     * the tooltip.
+     * A label is as wide as its text wants to be, and a path to a node binary has no space
+     * to wrap at — printing one in full stretched the dialog and put a scrollbar under it.
      */
     private fun refreshStatus() {
+        if (!settings.state.manageAgent) {
+            statusLabel.text = "No agent installed"
+            statusLabel.toolTipText = null
+            return
+        }
+
         val status = manager.status()
         val node = status.nodePath
 
@@ -349,5 +426,6 @@ class ClaudeAcpConfigurable : Configurable {
         const val DEFAULT_INTERVAL_HOURS = 24
         const val MEGABYTE = 1024L * 1024L
         const val MAX_PATH_CHARS = 40
+        const val AUTOMATIC_NODE = "Automatic"
     }
 }
