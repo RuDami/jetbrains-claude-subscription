@@ -193,18 +193,6 @@ class ClaudeAcpManager(private val scope: CoroutineScope) {
     }
 
     /**
-     * Frees the copies that are not in use, leaving the running one alone.
-     *
-     * Returns the versions removed, so the caller can say what happened rather than leave
-     * the user guessing whether the button did anything.
-     */
-    fun cleanUpInactiveVersions(): List<String> {
-        val active = status().installedVersion
-        return installer.removeInactiveVersions(active)
-            .onEach { LOG.info("Removed unused adapter version $it") }
-    }
-
-    /**
      * Deletes everything this plugin downloaded, including the running adapter. Only for
      * uninstall — anywhere else it would leave the agent pointing at a missing launcher.
      */
@@ -334,6 +322,7 @@ class ClaudeAcpManager(private val scope: CoroutineScope) {
                         return
                     }
 
+                    val previous = settings.state.installedVersion
                     val installed = installer.install(version, runtime, indicator)
                     installed.onFailure { failure ->
                         notify(
@@ -363,7 +352,7 @@ class ClaudeAcpManager(private val scope: CoroutineScope) {
                     if (result.isSuccess) {
                         notify(
                             NotificationType.INFORMATION,
-                            "Claude ACP adapter updated to $version",
+                            describeSwitch(previous, version),
                             "Open a new AI chat to use it — a chat that is already running keeps " +
                                 "the adapter process it started with.",
                         )
@@ -372,6 +361,32 @@ class ClaudeAcpManager(private val scope: CoroutineScope) {
                 }
             },
         )
+    }
+
+    /**
+     * Wording for the balloon after a version switch.
+     *
+     * Choosing an older build and being told it was "updated" is worse than unhelpful — it
+     * reads as the plugin having done the opposite of what was asked.
+     */
+    private fun describeSwitch(previous: String?, current: String): String = when {
+        previous == null -> "Claude ACP adapter $current installed"
+        VersionOrder.compare(current, previous) > 0 -> "Claude ACP adapter updated to $current"
+        VersionOrder.compare(current, previous) < 0 -> "Claude ACP adapter rolled back to $current"
+        else -> "Claude ACP adapter $current reinstalled"
+    }
+
+    /**
+     * Deletes the named versions, refusing to touch the one in use.
+     *
+     * The guard is here rather than in the dialog because every caller would otherwise have
+     * to remember it, and forgetting leaves the launcher pointing at nothing.
+     */
+    fun removeVersions(versions: List<String>): List<String> {
+        val active = status().installedVersion
+        return versions.filter { it != active }
+            .onEach { installer.removeVersion(it) }
+            .onEach { LOG.info("Removed adapter version $it") }
     }
 
     /** Starts the periodic check. Idempotent: a second call does not add a second loop. */

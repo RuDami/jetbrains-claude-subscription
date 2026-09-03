@@ -66,14 +66,8 @@ class ClaudeAcpConfigurable : Configurable {
                 row("Downloaded:") {
                     cell(diskLabel)
                         .align(AlignX.FILL)
-                        .comment("Clean Up keeps only the copy in use.")
-                    button("Clean Up") {
-                        inBackground("Removing unused Claude ACP adapters") {
-                            val removed = manager.cleanUpInactiveVersions()
-                            reloadVersions(refresh = false)
-                            invokeLater { announceCleanup(removed) }
-                        }
-                    }
+                        .comment("Clean Up never removes the copy in use.")
+                    button("Clean Up") { openCleanupDialog() }
                 }
 
                 row {
@@ -193,13 +187,42 @@ class ClaudeAcpConfigurable : Configurable {
         return desired != manager.status().installedVersion
     }
 
-    private fun announceCleanup(removed: List<String>) {
-        val message = if (removed.isEmpty()) {
-            "Nothing to remove: the only adapter on disk is the one in use."
-        } else {
-            "Removed " + removed.joinToString() + "."
+    /**
+     * Sizing every version walks its node_modules, so the list is built off the EDT and the
+     * dialog only opens once it has something to show.
+     */
+    private fun openCleanupDialog() {
+        inBackground("Measuring downloaded Claude ACP adapters") {
+            val active = manager.status().installedVersion
+            val removable = installer.installedVersions()
+                .filter { it != active }
+                .map { AdapterCleanupDialog.VersionEntry(it, installer.diskUsage(it)) }
+
+            invokeLater {
+                if (removable.isEmpty()) {
+                    Messages.showInfoMessage(
+                        "The only adapter on disk is the one in use.",
+                        "Claude Code ACP Bridge",
+                    )
+                    return@invokeLater
+                }
+
+                val dialog = AdapterCleanupDialog(active, removable)
+                if (!dialog.showAndGet()) return@invokeLater
+
+                val chosen = dialog.selected
+                inBackground("Deleting Claude ACP adapters") {
+                    val removed = manager.removeVersions(chosen)
+                    reloadVersions(refresh = false)
+                    invokeLater {
+                        Messages.showInfoMessage(
+                            "Removed " + removed.joinToString() + ".",
+                            "Claude Code ACP Bridge",
+                        )
+                    }
+                }
+            }
         }
-        Messages.showInfoMessage(message, "Claude Code ACP Bridge")
     }
 
     /** The version behind the selected row, without its status decoration. */

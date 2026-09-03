@@ -136,25 +136,24 @@ class AdapterInstaller {
         }
     }
 
-    /**
-     * Deletes every copy except [active].
-     *
-     * Deleting the active one too would leave the launcher pointing at nothing until the
-     * next startup reprovisioned it — a "free up disk space" button should never take the
-     * agent offline.
-     */
-    fun removeInactiveVersions(active: String?): List<String> =
-        installedVersions()
-            .filter { it != active }
-            .onEach { delete(it) }
+    /** Bytes held by all downloaded adapters. */
+    fun diskUsage(): Long = sizeOf(versionsRoot)
 
-    /** Bytes held by the downloaded adapters. */
-    fun diskUsage(): Long =
+    /** Bytes held by one downloaded adapter. */
+    fun diskUsage(version: String): Long = sizeOf(versionDir(version))
+
+    private fun sizeOf(directory: Path): Long =
         runCatching {
-            Files.walk(versionsRoot).use { paths ->
-                paths.filter { it.isRegularFile() }.mapToLong { runCatching { Files.size(it) }.getOrDefault(0L) }.sum()
+            Files.walk(directory).use { paths ->
+                paths.filter { it.isRegularFile() }
+                    .mapToLong { runCatching { Files.size(it) }.getOrDefault(0L) }
+                    .sum()
             }
         }.getOrDefault(0L)
+
+    fun removeVersion(version: String) {
+        delete(version)
+    }
 
     private fun delete(version: String) {
         runCatching { FileUtil.delete(versionDir(version).toFile()) }

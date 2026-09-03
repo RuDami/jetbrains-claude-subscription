@@ -71,17 +71,20 @@ class AdapterInstallerTest {
     }
 
     @Test
-    fun `cleanup removes every copy but the active one`() {
+    fun `removing a version leaves the others alone`() {
         listOf("0.73.0", "0.72.0", "0.71.0").forEach(::fakeInstall)
 
-        val removed = installer.removeInactiveVersions(active = "0.72.0")
+        installer.removeVersion("0.72.0")
 
-        assertEquals(listOf("0.73.0", "0.71.0"), removed)
-        assertEquals(listOf("0.72.0"), installer.installedVersions())
+        assertEquals(listOf("0.73.0", "0.71.0"), installer.installedVersions())
     }
 
     @Test
-    fun `cleanup with nothing active is a no-op on an empty directory`() {
-        assertTrue(installer.removeInactiveVersions(active = null).isEmpty())
+    fun `removing a version that is not installed does nothing`() {
+        fakeInstall("0.73.0")
+
+        installer.removeVersion("0.70.0")
+
+        assertEquals(listOf("0.73.0"), installer.installedVersions())
     }
 }
