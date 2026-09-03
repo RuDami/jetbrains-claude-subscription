@@ -86,6 +86,16 @@ object ClaudeAcpPageModel {
         ?.trim()
         ?.takeIf { it.isNotEmpty() }
 
+    /**
+     * What a node interpreter looks like in the drop-down.
+     *
+     * A combo box is as wide as its widest entry, and these entries are absolute paths — so
+     * the list alone set the whole settings page's minimum width. The full path stays the
+     * item's value and goes in the tooltip; only the label is shortened.
+     */
+    fun nodeLabel(item: String, home: String): String =
+        if (item == AUTOMATIC_NODE) item else abbreviatePath(item, home, LIST_PATH_CHARS)
+
     /** Null when the field holds the default, so settings store an override or nothing. */
     fun registryChoice(text: String?): String? =
         text?.trim()?.takeIf { it.isNotEmpty() && it != ClaudeAcpSettings.DEFAULT_REGISTRY }
@@ -153,4 +163,7 @@ object ClaudeAcpPageModel {
 
     private const val MEGABYTE = 1024L * 1024L
     private const val MAX_PATH_CHARS = 40
+
+    /** Shorter than the status line's: this one is repeated on every row of a list. */
+    private const val LIST_PATH_CHARS = 30
 }

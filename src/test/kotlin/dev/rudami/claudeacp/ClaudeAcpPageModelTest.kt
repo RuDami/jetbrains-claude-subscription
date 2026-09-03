@@ -279,6 +279,25 @@ class ClaudeAcpPageModelTest {
         assertTrue(shortened.length <= 23)
     }
 
+    /** A combo box is as wide as its widest row, so these must stay short. */
+    @Test
+    fun `an interpreter row is shortened but automatic is left alone`() {
+        assertEquals(
+            ClaudeAcpPageModel.AUTOMATIC_NODE,
+            ClaudeAcpPageModel.nodeLabel(ClaudeAcpPageModel.AUTOMATIC_NODE, home = "/Users/me"),
+        )
+        assertEquals(
+            "~/.nvm/bin/node",
+            ClaudeAcpPageModel.nodeLabel("/Users/me/.nvm/bin/node", home = "/Users/me"),
+        )
+
+        val long = ClaudeAcpPageModel.nodeLabel(
+            "/opt/homebrew/Cellar/node/24.15.0/libexec/lib/node_modules/npm/bin/node",
+            home = "/Users/me",
+        )
+        assertTrue(long.length <= 33, "a row this long would widen the whole page: $long")
+    }
+
     @Test
     fun `status names the version and the interpreter`() {
         assertEquals(

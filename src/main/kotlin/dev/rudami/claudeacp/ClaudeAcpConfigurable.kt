@@ -11,6 +11,7 @@ import com.intellij.openapi.ui.ComboBox
 import com.intellij.openapi.ui.Messages
 import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.ui.JBColor
+import com.intellij.ui.SimpleListCellRenderer
 import com.intellij.ui.components.JBCheckBox
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBTextField
@@ -20,6 +21,7 @@ import com.intellij.ui.dsl.builder.panel
 import com.intellij.util.ui.AsyncProcessIcon
 import javax.swing.JButton
 import javax.swing.JComponent
+import javax.swing.JList
 import javax.swing.JSpinner
 import javax.swing.SpinnerNumberModel
 
@@ -56,7 +58,23 @@ class ClaudeAcpConfigurable : Configurable {
     }
     // Not editable: "Automatic" is a sentinel, and letting it be typed over meant a
     // half-deleted word became a node path. Custom interpreters arrive through Browse.
-    private val nodeCombo = ComboBox<String>()
+    private val nodeCombo = ComboBox<String>().apply {
+        // Shows a shortened path while keeping the real one as the value and in the tooltip.
+        // Without this the list's widest absolute path set the whole page's minimum width.
+        renderer = object : SimpleListCellRenderer<String>() {
+            override fun customize(
+                list: JList<out String>,
+                value: String?,
+                index: Int,
+                selected: Boolean,
+                focused: Boolean,
+            ) {
+                val home = System.getProperty("user.home").orEmpty()
+                text = value?.let { ClaudeAcpPageModel.nodeLabel(it, home) }
+                toolTipText = value
+            }
+        }
+    }
     private val nameField = JBTextField()
     private val ideaMcpCheckBox = JBCheckBox("Expose the IDE's MCP server to the agent")
     private val customMcpCheckBox = JBCheckBox("Expose your own MCP servers to the agent")
@@ -102,6 +120,7 @@ class ClaudeAcpConfigurable : Configurable {
                 row("Version:") {
                     cell(versionCombo)
                         .align(AlignX.FILL)
+                        .responsive()
                         .comment("Newest first. Pick one and press OK to switch.")
                         .managed()
                 }
@@ -154,6 +173,7 @@ class ClaudeAcpConfigurable : Configurable {
                 row("On a new release:") {
                     cell(policyCombo)
                         .align(AlignX.FILL)
+                        .responsive()
                         .comment("Updates can change how subscription login behaves.")
                         .managed()
                 }
@@ -166,6 +186,7 @@ class ClaudeAcpConfigurable : Configurable {
                 row("Registry:") {
                     cell(registryCombo)
                         .align(AlignX.FILL)
+                        .responsive()
                         .comment("Pick a mirror or type your own.")
                         .managed()
                 }
@@ -175,6 +196,7 @@ class ClaudeAcpConfigurable : Configurable {
                 row("Name in the chat list:") {
                     cell(nameField)
                         .align(AlignX.FILL)
+                        .responsive()
                         .comment(
                             "The IDE derives the agent's id from this, so renaming it starts " +
                                 "a fresh agent: the model and permission mode remembered for " +
@@ -192,6 +214,7 @@ class ClaudeAcpConfigurable : Configurable {
                 row("Node.js:") {
                     cell(nodeCombo)
                         .align(AlignX.FILL)
+                        .responsive()
                         .comment(
                             "Detected interpreters. Automatic searches PATH, then the IDE's " +
                                 "own runtimes. Needs Node " +
@@ -216,6 +239,23 @@ class ClaudeAcpConfigurable : Configurable {
     private fun <T : JComponent> Cell<T>.managed(): Cell<T> {
         managedControls += component
         return this
+    }
+
+    /**
+     * Stops a field from deciding how wide the dialog has to be.
+     *
+     * A combo box asks for the width of its widest entry and a text field for the width of
+     * its content, and a panel must fit its widest child — so a list of absolute paths made
+     * the settings page wider than the window it opens in. Capping the preferred width and
+     * pairing it with `AlignX.FILL` inverts that: the field takes what the dialog gives it
+     * and shrinks when the dialog does.
+     */
+    private fun <T : JComponent> Cell<T>.responsive(): Cell<T> = apply {
+        when (val field = component) {
+            is ComboBox<*> -> field.setMinimumAndPreferredWidth(FIELD_WIDTH)
+            is JBTextField -> field.columns = FIELD_COLUMNS
+            else -> Unit
+        }
     }
 
     /** A tooltip plus [managed], since every explained control here is also a managed one. */
@@ -677,5 +717,9 @@ class ClaudeAcpConfigurable : Configurable {
          * either way; this is only for the ones that run past a line.
          */
         const val COMMENT_WRAP = 60
+
+        /** Preferred width for fields; AlignX.FILL lets them grow past it when there is room. */
+        const val FIELD_WIDTH = 280
+        const val FIELD_COLUMNS = 24
     }
 }
