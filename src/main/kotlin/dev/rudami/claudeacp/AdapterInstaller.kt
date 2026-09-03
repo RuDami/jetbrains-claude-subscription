@@ -6,6 +6,7 @@ import com.intellij.openapi.components.Service
 import com.intellij.openapi.diagnostic.logger
 import com.intellij.openapi.progress.ProgressIndicator
 import com.intellij.openapi.util.io.FileUtil
+import java.io.File
 import java.io.RandomAccessFile
 import java.nio.channels.FileLock
 import java.nio.file.Files
@@ -120,14 +121,49 @@ class AdapterInstaller {
     }
 
     /**
+     * Versions a running process is using right now.
+     *
+     * Every open chat holds two processes out of one version directory: the adapter itself
+     * and the native Claude Code binary the SDK spawns beside it. Deleting that directory
+     * does not kill them — an unlinked file stays alive while it is open — but the moment
+     * that adapter needs something it has not loaded yet, most obviously the binary for a
+     * new session, it is gone. So a version in use is not a candidate for deletion, whether
+     * the deletion is automatic or asked for.
+     *
+     * Best effort: `commandLine()` is unavailable for other users' processes and commonly
+     * empty on Windows, so this can under-report and never over-reports.
+     */
+    fun versionsInUse(): Set<String> {
+        val prefix = versionsRoot.toString() + File.separator
+
+        return runCatching {
+            ProcessHandle.allProcesses().iterator().asSequence()
+                .mapNotNull { it.info().commandLine().orElse(null) }
+                .filter { it.contains(prefix) }
+                .map { it.substringAfter(prefix).substringBefore(File.separatorChar) }
+                .filter { it.isNotBlank() }
+                .toSet()
+        }.getOrElse {
+            LOG.info("Could not inspect running processes: ${it.message}")
+            emptySet()
+        }
+    }
+
+    /**
      * Keeps [active] plus the newest [keep] - 1 others, so a rollback target survives.
      *
      * [active] is excluded explicitly rather than trusted to be newest: after a rollback it
      * is precisely the oldest copy on disk, and dropping by recency alone deleted the very
-     * adapter the launcher points at.
+     * adapter the launcher points at. Versions [inUse] are spared for the same reason — an
+     * update installs a new version and prunes immediately, which would otherwise cut the
+     * ground from under a chat still running on the old one.
      */
-    fun pruneOldVersions(active: String?, keep: Int = KEEP_VERSIONS) {
-        val disposable = installedVersions().filter { it != active }
+    fun pruneOldVersions(
+        active: String?,
+        keep: Int = KEEP_VERSIONS,
+        inUse: Set<String> = versionsInUse(),
+    ) {
+        val disposable = installedVersions().filter { it != active && it !in inUse }
         val survivors = if (active == null) keep else keep - 1
 
         disposable.drop(survivors.coerceAtLeast(0)).forEach { stale ->

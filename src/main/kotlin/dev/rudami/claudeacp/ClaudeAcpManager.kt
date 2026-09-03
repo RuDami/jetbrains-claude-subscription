@@ -404,14 +404,16 @@ class ClaudeAcpManager(private val scope: CoroutineScope) {
     }
 
     /**
-     * Deletes the named versions, refusing to touch the one in use.
+     * Deletes the named versions, refusing to touch the active one or any that a process is
+     * running from right now.
      *
      * The guard is here rather than in the dialog because every caller would otherwise have
-     * to remember it, and forgetting leaves the launcher pointing at nothing.
+     * to remember it, and forgetting leaves either the launcher pointing at nothing or an
+     * open chat without the binary it is about to need.
      */
     fun removeVersions(versions: List<String>): List<String> {
-        val active = status().installedVersion
-        return versions.filter { it != active }
+        val spared = setOfNotNull(status().installedVersion) + installer.versionsInUse()
+        return versions.filter { it !in spared }
             .onEach { installer.removeVersion(it) }
             .onEach { LOG.info("Removed adapter version $it") }
     }

@@ -21,6 +21,7 @@ import javax.swing.JComponent
 class AdapterCleanupDialog(
     private val active: String?,
     private val removable: List<VersionEntry>,
+    private val busy: Set<String> = emptySet(),
 ) : DialogWrapper(true) {
 
     data class VersionEntry(val version: String, val bytes: Long)
@@ -42,9 +43,7 @@ class AdapterCleanupDialog(
 
     override fun createCenterPanel(): JComponent = panel {
         row {
-            val kept = active?.let { "Keeping $it, which the agent is running." }
-                ?: "No adapter is currently active."
-            cell(JBLabel(kept))
+            cell(JBLabel(describeKept()))
         }
 
         row {
@@ -64,6 +63,19 @@ class AdapterCleanupDialog(
         removable.isEmpty() -> ValidationInfo("The only adapter on disk is the one in use.")
         selected.isEmpty() -> ValidationInfo("Tick at least one version to delete.")
         else -> null
+    }
+
+    /** Names what is being spared, so an absent row is explained rather than just missing. */
+    private fun describeKept(): String {
+        val stillRunning = busy.filter { it != active }
+        val parts = buildList {
+            active?.let { add("Keeping $it, which the agent is running.") }
+            if (stillRunning.isNotEmpty()) {
+                add("Also keeping " + stillRunning.joinToString() + ", still used by an open chat.")
+            }
+            if (isEmpty()) add("No adapter is currently active.")
+        }
+        return parts.joinToString(" ")
     }
 
     private fun setAllSelected(selected: Boolean) {

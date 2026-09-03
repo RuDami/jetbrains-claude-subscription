@@ -55,17 +55,33 @@ class AdapterInstallerTest {
     fun `pruning keeps the active version even when it is the oldest`() {
         listOf("0.73.0", "0.72.0", "0.71.0").forEach(::fakeInstall)
 
-        installer.pruneOldVersions(active = "0.71.0", keep = 2)
+        installer.pruneOldVersions(active = "0.71.0", keep = 2, inUse = emptySet())
 
         assertTrue(installer.isInstalled("0.71.0"), "the running adapter must survive pruning")
         assertEquals(listOf("0.73.0", "0.71.0"), installer.installedVersions())
+    }
+
+    /**
+     * A chat left open goes on running an older adapter, and an update prunes right after
+     * installing — so pruning by recency alone pulled the binary out from under a live
+     * session.
+     */
+    @Test
+    fun `pruning spares a version a running chat still uses`() {
+        listOf("0.74.0", "0.73.0", "0.72.0", "0.71.0").forEach(::fakeInstall)
+
+        installer.pruneOldVersions(active = "0.74.0", keep = 2, inUse = setOf("0.71.0"))
+
+        // 0.72.0 is the one genuinely spare, so it goes. The active build, the single spare
+        // the keep count allows, and the one a chat is running all stay.
+        assertEquals(listOf("0.74.0", "0.73.0", "0.71.0"), installer.installedVersions())
     }
 
     @Test
     fun `pruning keeps the newest when nothing is active yet`() {
         listOf("0.73.0", "0.72.0", "0.71.0").forEach(::fakeInstall)
 
-        installer.pruneOldVersions(active = null, keep = 2)
+        installer.pruneOldVersions(active = null, keep = 2, inUse = emptySet())
 
         assertEquals(listOf("0.73.0", "0.72.0"), installer.installedVersions())
     }

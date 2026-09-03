@@ -37,6 +37,15 @@ without a message line, "repaired" and "did nothing" look identical.
 rollback is exactly wrong — the running adapter is then the oldest copy on disk. Pass the
 active version and exclude it explicitly. Regression test in `AdapterInstallerTest`.
 
+**Never delete a version a process is running from.** Each open chat runs two processes out
+of one version directory — the adapter, and the native Claude Code binary the SDK spawns
+beside it. Unlinking that directory does not kill them, but the first thing they have not
+already loaded, above all the binary for a new session, is then gone. `versionsInUse()`
+reads live command lines through `ProcessHandle`; it is best effort (unavailable for other
+users' processes, commonly empty on Windows) so it under-reports and never over-reports.
+This bites automatically, not just on the cleanup dialog: an update installs and prunes
+immediately, while an old chat is still running.
+
 **Do not word a downgrade as an update.** The balloon compares against the previous version
 and says installed / updated to / rolled back to / reinstalled.
 

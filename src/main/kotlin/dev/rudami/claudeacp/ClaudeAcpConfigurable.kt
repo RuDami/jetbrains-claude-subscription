@@ -317,20 +317,23 @@ class ClaudeAcpConfigurable : Configurable {
     private fun openCleanupDialog() {
         inBackground("Measuring downloaded Claude ACP adapters") {
             val active = manager.status().installedVersion
+            // A chat left open keeps running an older adapter, and that copy is not spare.
+            val busy = installer.versionsInUse()
             val removable = installer.installedVersions()
-                .filter { it != active }
+                .filter { it != active && it !in busy }
                 .map { AdapterCleanupDialog.VersionEntry(it, installer.diskUsage(it)) }
 
             invokeLater {
                 if (removable.isEmpty()) {
                     Messages.showInfoMessage(
-                        "The only adapter on disk is the one in use.",
+                        "Every adapter on disk is in use — by the active agent or by a chat " +
+                            "that is still open.",
                         "Claude Code ACP Bridge",
                     )
                     return@invokeLater
                 }
 
-                val dialog = AdapterCleanupDialog(active, removable)
+                val dialog = AdapterCleanupDialog(active, removable, busy)
                 if (!dialog.showAndGet()) return@invokeLater
 
                 val chosen = dialog.selected
