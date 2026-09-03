@@ -83,6 +83,23 @@ object AcpConfigFile {
         }
     }
 
+    /**
+     * Names of agents whose command line mentions [needle], excluding [except].
+     *
+     * Used to spot another agent running the same adapter — the upstream plugin registers one
+     * through `npx`, and two things writing the same config fight over it on every start.
+     * Looking at the file rather than at the installed plugin list keeps this working for a
+     * hand-written entry too, and avoids the platform's internal plugin-lookup API.
+     */
+    @Synchronized
+    fun agentsMentioning(needle: String, except: String): List<String> {
+        val servers = read()?.getAsJsonObject(AGENT_SERVERS) ?: return emptyList()
+
+        return servers.keySet().filter { name ->
+            name != except && servers.getAsJsonObject(name)?.toString()?.contains(needle) == true
+        }
+    }
+
     /** Drops our entry, leaving the rest of the file alone. */
     @Synchronized
     fun removeAgent(name: String): Outcome {

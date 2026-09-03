@@ -1,9 +1,7 @@
 package dev.rudami.claudeacp
 
-import com.intellij.ide.plugins.PluginManagerCore
 import com.intellij.notification.NotificationGroupManager
 import com.intellij.notification.NotificationType
-import com.intellij.openapi.extensions.PluginId
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.startup.ProjectActivity
 import java.util.concurrent.atomic.AtomicBoolean
@@ -19,7 +17,7 @@ class ClaudeAgentProvisioner : ProjectActivity {
     override suspend fun execute(project: Project) {
         if (!provisionedThisSession.compareAndSet(false, true)) return
 
-        warnAboutConflictingPlugin()
+        warnAboutRivalAgent()
 
         val manager = ClaudeAcpManager.getInstance()
         // Spawns node and may run npm on a first install, so it goes to a background task
@@ -29,30 +27,37 @@ class ClaudeAgentProvisioner : ProjectActivity {
     }
 
     /**
-     * The upstream plugin writes the same `agent_servers` key from its own startup
-     * activity, so with both installed the entry flips between the two on every launch
-     * depending on which ran last.
+     * Warns when something else already registers this adapter.
+     *
+     * The upstream plugin writes its own `agent_servers` entry from its own startup activity,
+     * so with both installed the config flips on every launch depending on which ran last.
+     *
+     * This looks at the config rather than at the list of installed plugins on purpose. The
+     * platform's plugin lookup is internal API — the Plugin Verifier fails a build that uses
+     * it — and the file is the better evidence anyway: it catches a hand-written duplicate as
+     * well, and says nothing when the rival plugin is installed but disabled.
      */
-    private fun warnAboutConflictingPlugin() {
-        val upstreamId = PluginId.getId(UPSTREAM_PLUGIN_ID)
-        val conflicting = PluginManagerCore.getPlugin(upstreamId) ?: return
-        if (PluginManagerCore.isDisabled(upstreamId)) return
+    private fun warnAboutRivalAgent() {
+        val settings = ClaudeAcpSettings.getInstance()
+        val rivals = AcpConfigFile.agentsMentioning(
+            needle = ClaudeAcpSettings.PACKAGE_NAME,
+            except = settings.displayName,
+        )
+        if (rivals.isEmpty()) return
 
         NotificationGroupManager.getInstance()
             .getNotificationGroup(ClaudeAcpManager.NOTIFICATION_GROUP)
             .createNotification(
-                "Two plugins manage the same ACP agent",
-                "\"${conflicting.name}\" is still enabled and writes the same entry in " +
-                    "${AcpConfigFile.path}. Disable or uninstall it, otherwise the agent " +
-                    "configuration changes on every IDE start.",
+                "Another agent runs the same adapter",
+                "The chat agent list also holds " + rivals.joinToString { "\"$it\"" } +
+                    ", which starts the same package. If a plugin maintains that entry, " +
+                    "disable it — otherwise the two rewrite each other on every IDE start.",
                 NotificationType.WARNING,
             )
             .notify(null)
     }
 
     private companion object {
-        const val UPSTREAM_PLUGIN_ID = "dev.vanssa.claudeacp"
-
         val provisionedThisSession = AtomicBoolean(false)
     }
 }

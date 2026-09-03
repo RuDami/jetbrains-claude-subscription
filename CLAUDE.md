@@ -92,6 +92,17 @@ among them) are compiled at 25 and Kotlin will not inline newer bytecode into an
 target. Build with the JetBrains Runtime:
 `JAVA_HOME=/Applications/WebStorm.app/Contents/jbr/Contents/Home`.
 
+**Internal platform API fails the build, not just the review.** `verifyPlugin` reports
+`INTERNAL_API_USAGES` as a failure even when the verdict line says "Compatible" —
+`PluginManagerCore.getPlugin` cost one CI run. Anything annotated `@ApiStatus.Internal` or
+`@IntellijInternalApi` is off limits; look for a public route, or for evidence somewhere else
+entirely. Detecting a rival agent by reading `acp.json` turned out better than asking the
+platform which plugins are installed.
+
+Deprecated and experimental usages are reported but do not fail. The current ones come from
+implementing `DynamicPluginListener`: Kotlin generates overrides for a Java interface's
+default methods, so the verifier counts members the code never mentions.
+
 **Check for deprecation before using a platform API.** Found the hard way:
 `FileChooserDescriptorFactory.createSingleFileDescriptor()` and
 `createSingleLocalFileDescriptor()` are both deprecated — the current one is `singleFile()`.

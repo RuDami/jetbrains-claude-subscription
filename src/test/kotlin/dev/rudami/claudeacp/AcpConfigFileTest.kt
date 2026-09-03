@@ -105,6 +105,38 @@ class AcpConfigFileTest {
     }
 
     @Test
+    fun `finds another agent running the same package`() {
+        AcpConfigFile.upsertAgent(
+            "Rival",
+            JsonObject().apply {
+                addProperty("command", "/usr/bin/node")
+                add(
+                    "args",
+                    com.google.gson.JsonArray().apply {
+                        add("/usr/lib/npx-cli.js")
+                        add("-y")
+                        add("@agentclientprotocol/claude-agent-acp@0.62.0")
+                    },
+                )
+            },
+        )
+        AcpConfigFile.upsertAgent("Ours", entry("/home/me/.jetbrains/claude-acp-adapter/launch.sh"))
+        AcpConfigFile.upsertAgent("Unrelated", entry("/usr/local/bin/some-other-agent"))
+
+        val rivals = AcpConfigFile.agentsMentioning("@agentclientprotocol/claude-agent-acp", except = "Ours")
+        assertEquals(listOf("Rival"), rivals)
+    }
+
+    @Test
+    fun `our own entry is never reported as a rival`() {
+        AcpConfigFile.upsertAgent("Ours", entry("/home/me/.jetbrains/claude-acp-adapter/launch.sh"))
+
+        assertTrue(
+            AcpConfigFile.agentsMentioning("claude-acp-adapter", except = "Ours").isEmpty(),
+        )
+    }
+
+    @Test
     fun `finds the entries this plugin wrote by their command path`() {
         val adapterRoot = directory.resolve("adapter")
         AcpConfigFile.upsertAgent("Old Name", entry(adapterRoot.resolve("launch.sh").toString()))
