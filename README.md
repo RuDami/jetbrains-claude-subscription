@@ -34,6 +34,7 @@ DataGrip — any 2026.2+ JetBrains IDE with the AI Assistant plugin.
 - [Verify it works](#verify-it-works)
 - [CLI fallback (Zed and other ACP clients)](#cli-fallback-zed-and-other-acp-clients)
 - [Credits and links](#credits-and-links)
+- [Other Claude plugins for JetBrains](#other-claude-plugins-for-jetbrains-and-how-this-one-differs)
 
 ## The problem this solves
 
@@ -248,11 +249,36 @@ plugin — another editor, Zed, or debugging. Run `npm install` in the repositor
 
 ## Keywords
 
-Claude Code JetBrains plugin · Claude Pro subscription IntelliJ · Claude Max subscription
-WebStorm · Agent Client Protocol · ACP agent JetBrains · claude-agent-acp · use Claude
-without API key in IDE · `--hide-claude-auth` · claude.ai subscription not supported ·
+Claude Code JetBrains plugin · Claude Code [Beta] alternative · Claude Code with GUI ·
+Swttch · CC GUI · Claude Agent ACP registry · Claude Pro subscription IntelliJ · Claude Max
+subscription WebStorm · Agent Client Protocol · ACP agent JetBrains · claude-agent-acp · use
+Claude without API key in IDE · `--hide-claude-auth` · claude.ai subscription not supported ·
 JetBrains AI Assistant custom agent · acp.json · Claude Code in PhpStorm, PyCharm, GoLand,
 RubyMine, CLion, Rider, DataGrip
+
+## Other Claude plugins for JetBrains, and how this one differs
+
+The Marketplace carries several plugins with similar names. This is not one of them — it is
+not on the Marketplace at all — so if you arrived looking for one of these, follow the link.
+
+- **[Claude Code [Beta]](https://plugins.jetbrains.com/plugin/27310-claude-code-beta)** —
+  Anthropic's own JetBrains plugin, with its own chat window. If it covers what you need,
+  use it: it is official and supported.
+- **[Claude Code with GUI / Swttch](https://plugins.jetbrains.com/plugin/30313-claude-code-with-gui)**
+  and **[CC GUI](https://plugins.jetbrains.com/plugin/29342)** — third-party graphical front
+  ends for the Claude Code CLI, in the spirit of the Cursor and VS Code interfaces.
+- **Claude Agent** — the agent JetBrains ships in its own ACP Registry, inside AI Assistant.
+  It runs the same adapter as this project but with `--hide-claude-auth`, which is what
+  rejects a Claude.ai subscription.
+
+**What this project is instead:** the smallest possible difference from that last one. It
+registers the same official adapter in JetBrains AI Chat *without* that flag, so the agent
+lives in the IDE's own AI Assistant chat — same interface, same MCP integration, same
+permission prompts — and signs in with a Pro/Max subscription. No separate window, no second
+chat UI, no API key.
+
+Pick this one if you want Claude inside JetBrains AI Chat on a subscription. Pick one of the
+others if you want a dedicated Claude window or an officially supported plugin.
 
 ## Attribution
 
