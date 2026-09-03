@@ -38,8 +38,13 @@ from `isModified()` — which the dialog calls on every keystroke — and from f
 interpreter list while opening. Slow calls are named in their KDoc now; the page paints from
 a snapshot taken on a background thread.
 
-**Busy state is a counter, not a flag.** Two overlapping operations otherwise have the first
-one to finish re-enable every control while the second is still running.
+**Busy state is a counter, not a flag** — two overlapping operations otherwise have the first
+one to finish re-enable every control while the second is still running. **Pair it in one
+place.** Making it a counter turned scattered `beginBusy` calls from harmless into a hang:
+six begins against two ends, and every action left the page spinning while its result
+appeared below. `inBackground(title, busy) { }` owns the pair, in a `finally`. A callback API
+used to close a busy state must fire on every path — `updateTo` returning silently on a
+duplicate request was the same hang by another route.
 
 ## Files everything else is watching
 

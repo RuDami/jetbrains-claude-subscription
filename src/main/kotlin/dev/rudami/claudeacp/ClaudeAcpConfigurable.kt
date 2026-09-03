@@ -106,16 +106,14 @@ class ClaudeAcpConfigurable : Configurable {
 
                 row {
                     button("Check for Updates") {
-                        beginBusy("Checking the registry")
-                        inBackground("Checking for Claude ACP adapter updates") {
+                        inBackground("Checking for Claude ACP adapter updates", "Checking the registry") {
                             manager.checkForUpdates(manual = true)
                             reloadVersions(refresh = true, report = true)
                         }
                     }.explain("Asks the registry whether a newer adapter has been published.")
 
                     button("Repair") {
-                        beginBusy("Repairing the installation")
-                        inBackground("Repairing the Claude Code agent") {
+                        inBackground("Repairing the Claude Code agent", "Repairing the installation") {
                             val result = manager.provision()
                             reloadVersions(refresh = false)
                             invokeLater {
@@ -221,7 +219,7 @@ class ClaudeAcpConfigurable : Configurable {
 
         syncManaged()
         refreshStatus()
-        inBackground("Listing Claude ACP adapter versions") {
+        inBackground("Listing Claude ACP adapter versions", "Loading adapter versions") {
             loadDetectedNodes()
             reloadVersions(refresh = false)
         }
@@ -261,10 +259,15 @@ class ClaudeAcpConfigurable : Configurable {
         val desired = selectedVersion()
         if (versionChanged() && desired != null) {
             beginBusy("Installing " + desired)
-            manager.updateTo(desired, null) { reloadVersions(refresh = false) }
+            // updateTo runs its own background task, so the busy state is closed from its
+            // completion callback — which it always calls, including when it drops a
+            // duplicate request.
+            manager.updateTo(desired, null) {
+                reloadVersions(refresh = false)
+                invokeLater { endBusy() }
+            }
         } else {
-            beginBusy("Applying settings")
-            inBackground("Applying Claude Code agent settings") {
+            inBackground("Applying Claude Code agent settings", "Applying settings") {
                 manager.provision()
                 reloadVersions(refresh = false)
             }
@@ -295,14 +298,12 @@ class ClaudeAcpConfigurable : Configurable {
 
             state.manageAgent = false
             syncManaged()
-            beginBusy("Removing the agent")
-            inBackground("Removing the Claude Code agent") {
+            inBackground("Removing the Claude Code agent", "Removing the agent") {
                 manager.removeAgentEntry()
                 manager.removeAdapterFiles()
                 invokeLater {
                     versionCombo.removeAllItems()
                     diskLabel.text = "nothing downloaded"
-                    endBusy()
                 }
             }
         } else {
@@ -311,8 +312,7 @@ class ClaudeAcpConfigurable : Configurable {
             syncManaged()
             // A first install downloads the adapter, which is the longest wait this page
             // ever produces.
-            beginBusy("Downloading the adapter")
-            inBackground("Setting up the Claude Code agent") {
+            inBackground("Setting up the Claude Code agent", "Downloading the adapter") {
                 manager.provision()
                 reloadVersions(refresh = false)
             }
@@ -343,7 +343,7 @@ class ClaudeAcpConfigurable : Configurable {
     }
 
     private fun openCleanupDialog() {
-        inBackground("Measuring downloaded Claude ACP adapters") {
+        inBackground("Measuring downloaded Claude ACP adapters", "Measuring downloads") {
             val active = manager.status().installedVersion
             // A chat left open keeps running an older adapter, and that copy is not spare.
             val busy = installer.versionsInUse()
@@ -366,7 +366,7 @@ class ClaudeAcpConfigurable : Configurable {
 
                 val chosen = dialog.selected
                 val force = dialog.forced
-                inBackground("Deleting Claude ACP adapters") {
+                inBackground("Deleting Claude ACP adapters", "Deleting adapters") {
                     val removed = manager.removeVersions(chosen, force)
                     reloadVersions(refresh = false)
                     invokeLater {
@@ -461,9 +461,12 @@ class ClaudeAcpConfigurable : Configurable {
         toggleButton.text = if (managed) "Remove Agent" else "Add Agent"
     }
 
+    /**
+     * Does not touch the busy state: its callers already hold one through [inBackground], and
+     * a second `beginBusy` here was never matched by a second `endBusy` — which left the page
+     * spinning on "Loading adapter versions" forever while the result quietly arrived below.
+     */
     private fun reloadVersions(refresh: Boolean, report: Boolean = false) {
-        invokeLater { beginBusy("Loading adapter versions") }
-
         val installed = installer.installedVersions()
         val fetched = manager.availableVersions(refresh)
         val published = fetched.getOrNull().orEmpty()
@@ -495,7 +498,6 @@ class ClaudeAcpConfigurable : Configurable {
             diskLabel.text = summary
             lastStatus = status
 
-            endBusy()
             when {
                 // Not fatal: what is already downloaded still runs, and the list falls back
                 // to it. Saying so beats a combo that is silently short.
@@ -611,10 +613,26 @@ class ClaudeAcpConfigurable : Configurable {
         else "..." + shortened.takeLast(MAX_PATH_CHARS)
     }
 
-    private fun inBackground(title: String, body: () -> Unit) {
+    /**
+     * Runs [body] off the EDT, pairing the busy state around it.
+     *
+     * Pairing lives here rather than at each call site because it stopped being balanced the
+     * moment the busy state became a counter: six `beginBusy` calls were scattered across
+     * button handlers against two `endBusy` calls, and every action left the page spinning.
+     * `finally` also covers a body that throws, which nothing did before.
+     */
+    private fun inBackground(title: String, busy: String? = null, body: () -> Unit) {
+        if (busy != null) beginBusy(busy)
+
         ProgressManager.getInstance().run(
             object : Task.Backgroundable(null, title, false) {
-                override fun run(indicator: ProgressIndicator) = body()
+                override fun run(indicator: ProgressIndicator) {
+                    try {
+                        body()
+                    } finally {
+                        if (busy != null) invokeLater { endBusy() }
+                    }
+                }
             },
         )
     }

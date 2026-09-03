@@ -328,10 +328,16 @@ class ClaudeAcpManager(private val scope: CoroutineScope) {
      * decides whether to switch by comparing against the installed version, which does not
      * change until this background task finishes — so pressing Apply and then OK asked for
      * the same install twice and announced it twice.
+     *
+     * [onFinished] is called exactly once on every path, dropped requests included, because
+     * callers use it to close a progress indicator.
      */
     fun updateTo(version: String, project: Project?, onFinished: (Result<Unit>) -> Unit = {}) {
         if (!installsInFlight.add(version)) {
             LOG.info("Install of $version already running; ignoring the repeat request")
+            // Still reported: [onFinished] is how the settings page learns it may stop
+            // showing a spinner, and a silent return left it spinning forever.
+            onFinished(Result.failure(IllegalStateException("install of $version already running")))
             return
         }
 
