@@ -128,6 +128,7 @@ class ClaudeAcpConfigurable : Configurable {
                 }.comment(
                     "Check looks for a newer release. Repair fixes an agent that stopped " +
                         "working. Free Up Space deletes adapters you no longer run.",
+                    COMMENT_WRAP,
                 )
             }
 
@@ -165,6 +166,7 @@ class ClaudeAcpConfigurable : Configurable {
                             "Detected interpreters. Automatic searches PATH, then the IDE's " +
                                 "own runtimes. Needs Node " +
                                 NodeRuntimeResolver.MINIMUM_MAJOR + " or newer.",
+                            COMMENT_WRAP,
                         )
                         .managed()
                 }
@@ -547,5 +549,15 @@ class ClaudeAcpConfigurable : Configurable {
         const val MAX_PATH_CHARS = 40
         const val AUTOMATIC_NODE = "Automatic"
         const val LOADING_ITEM = "Loading..."
+
+        /**
+         * Characters before a comment wraps.
+         *
+         * Without a limit a comment is laid out on one line however long it is, and since
+         * the panel must fit its widest child, one long sentence pushes every labelled
+         * field leftwards and produces a horizontal scrollbar. Short comments are unaffected
+         * either way; this is only for the ones that run past a line.
+         */
+        const val COMMENT_WRAP = 60
     }
 }
