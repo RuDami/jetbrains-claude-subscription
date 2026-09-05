@@ -1,4 +1,4 @@
-# Claude Code ACP Bridge — use a Claude Pro/Max subscription in JetBrains IDEs
+# Claude Code ACP Bridge for JetBrains AI Assistant — use a Claude Pro/Max subscription
 
 > **Unofficial plugin.** A personal community project — not affiliated with, endorsed by,
 > or supported by JetBrains or Anthropic. It is not distributed on JetBrains Marketplace;
@@ -89,6 +89,8 @@ No Anthropic API key is required, and none is used.
 If the upstream plugin or a hand-written agent entry is already registered, the plugin says
 so — two things maintaining the same entry rewrite each other on every start.
 
+![The agent answering in AI Chat, signed in with a subscription](screenshots/chat.jpg)
+
 ## What it does
 
 - Installs the adapter with `npm` into `~/.jetbrains/claude-acp-adapter/versions/<version>/`,
@@ -112,6 +114,8 @@ with.
 
 **Settings → Tools → Claude Code ACP Bridge**
 
+![The plugin's settings page: adapter version, updates and agent options](screenshots/settings.jpg)
+
 | Control | What it does |
 |---|---|
 | Version | Every release in the registry plus what is downloaded, marked *active* / *downloaded*. Pick one, press OK, and the plugin switches to it — an older build is a rollback. |
@@ -132,6 +136,8 @@ with.
 **Settings → Tools → Claude Code ACP Bridge → Permissions** edits the project's
 `.claude/settings.json`, which Claude Code reads and the adapter watches — changes reach a
 running agent immediately.
+
+![The permissions page: scope, default mode and the three rule lists](screenshots/permissions.jpg)
 
 - **Applies to** — settings shared with the team (`.claude/settings.json`) or kept to this
   machine (`.claude/settings.local.json`).
