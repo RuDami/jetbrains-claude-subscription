@@ -6,7 +6,7 @@ plugins {
 }
 
 group = "dev.rudami"
-version = "0.2.3"
+version = "0.2.4"
 
 repositories {
     mavenCentral()
@@ -86,6 +86,13 @@ intellijPlatform {
 
         changeNotes.set(
             """
+            <b>0.2.4</b>
+            <ul>
+              <li>The settings page fits a standard settings window again. Fields no longer
+                  set the page's width, and the interpreter list shows a shortened path with
+                  the full one in its tooltip.</li>
+            </ul>
+
             <b>0.2.3</b>
             <ul>
               <li>The agent can be renamed from the settings page; the old entry is removed
