@@ -7,7 +7,6 @@ import com.intellij.openapi.components.SettingsCategory
 import com.intellij.openapi.components.SimplePersistentStateComponent
 import com.intellij.openapi.components.State
 import com.intellij.openapi.components.Storage
-import com.intellij.openapi.components.service
 
 /** What to do when a newer adapter version shows up in the npm registry. */
 enum class UpdatePolicy(private val label: String) {
@@ -89,7 +88,7 @@ class ClaudeAcpSettings : SimplePersistentStateComponent<ClaudeAcpSettings.State
             "https://registry.yarnpkg.com",
         )
 
-        fun getInstance(): ClaudeAcpSettings = service()
+        fun getInstance(): ClaudeAcpSettings = pluginService()
     }
 }
 

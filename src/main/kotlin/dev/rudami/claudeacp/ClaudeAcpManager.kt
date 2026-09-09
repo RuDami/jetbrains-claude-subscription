@@ -7,7 +7,6 @@ import com.intellij.notification.NotificationAction
 import com.intellij.notification.NotificationGroupManager
 import com.intellij.notification.NotificationType
 import com.intellij.openapi.components.Service
-import com.intellij.openapi.components.service
 import com.intellij.openapi.diagnostic.logger
 import com.intellij.openapi.util.io.FileUtil
 import com.intellij.openapi.progress.ProgressIndicator
@@ -534,6 +533,6 @@ class ClaudeAcpManager(private val scope: CoroutineScope) {
 
         private val LOG = logger<ClaudeAcpManager>()
 
-        fun getInstance(): ClaudeAcpManager = service()
+        fun getInstance(): ClaudeAcpManager = pluginService()
     }
 }

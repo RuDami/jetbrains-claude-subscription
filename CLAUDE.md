@@ -148,6 +148,18 @@ default methods, so the verifier counts members the code never mentions.
 `Notification.setListener` is deprecated in favour of `addAction`.
 `IdeaPluginDescriptor.isEnabled` is deprecated in favour of `PluginManagerCore.isDisabled`.
 
+## Reloading the plugin
+
+**Never look up one of our services with `service()` directly — use `pluginService()`.**
+Updating the plugin without restarting unloads it and loads it again under a new class
+loader, and does not stop work already running out of the old one. The leftover background
+provision then asks for `ClaudeAcpSettings`, gets the new plugin's instance, and dies with
+`ClaudeAcpSettings cannot be cast to ClaudeAcpSettings` — one class name, two loaders, and a
+fatal error reported against a version that is no longer installed. `pluginService()` turns
+that into a cancellation, which a background task ends quietly; the copy that replaced us
+provisions on its own, so there is nothing else to salvage. Note that a leaked task already
+inside `npm install` finishes that install first — it only stops at its next service lookup.
+
 ## Verifying a change
 
 ```bash

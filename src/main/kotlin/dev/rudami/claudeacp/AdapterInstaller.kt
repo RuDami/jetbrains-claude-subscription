@@ -274,6 +274,6 @@ class AdapterInstaller {
 
         private val LOG = logger<AdapterInstaller>()
 
-        fun getInstance(): AdapterInstaller = com.intellij.openapi.components.service()
+        fun getInstance(): AdapterInstaller = pluginService()
     }
 }
