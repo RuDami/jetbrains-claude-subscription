@@ -160,6 +160,15 @@ that into a cancellation, which a background task ends quietly; the copy that re
 provisions on its own, so there is nothing else to salvage. Note that a leaked task already
 inside `npm install` finishes that install first — it only stops at its next service lookup.
 
+**The `try` has to wrap the cast, not the lookup.** `pluginService()` first caught around an
+inlined `service<T>()`. `getService` is erased to `Object`, so the compiler emitted the
+`checkcast` on the value the inlined block produced — one instruction past the end of the
+exception table. The catch was unreachable and the crash looked exactly as before, at a
+synthetic line number beyond the end of the file (inlined code is attributed to the caller).
+The cast now happens inside a non-inline `ownInstance`, through `Class.cast`, where it can be
+caught; `PluginServicesTest` covers it. When a guard looks dead, read the exception table:
+`javap -c build/classes/kotlin/main/…`.
+
 ## Verifying a change
 
 ```bash

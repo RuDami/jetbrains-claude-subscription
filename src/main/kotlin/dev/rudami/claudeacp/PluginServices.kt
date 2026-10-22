@@ -1,6 +1,6 @@
 package dev.rudami.claudeacp
 
-import com.intellij.openapi.components.service
+import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.diagnostic.logger
 import com.intellij.openapi.progress.ProcessCanceledException
 
@@ -21,20 +21,32 @@ import com.intellij.openapi.progress.ProcessCanceledException
  * is cancelled instead, which a background task ends quietly, rather than reported as a
  * fatal error against a plugin version no longer installed.
  */
-internal inline fun <reified T : Any> pluginService(): T =
-    try {
-        service<T>()
-    } catch (mismatch: ClassCastException) {
-        throw abandonStaleClassLoader(T::class.java, mismatch)
-    }
+internal inline fun <reified T : Any> pluginService(): T = pluginService(T::class.java)
 
-@PublishedApi
-internal fun abandonStaleClassLoader(serviceClass: Class<*>, mismatch: ClassCastException): ProcessCanceledException {
-    LOG.info(
-        "Abandoning work started before the plugin was reloaded: ${serviceClass.name} now " +
-            "belongs to a newer class loader (${mismatch.message})",
-    )
-    return ProcessCanceledException()
+/**
+ * The cast has to happen in here, not at the call site.
+ *
+ * `service<T>()` is inline and `getService` is erased to `Object`, so wrapping the call in a
+ * `try` guards nothing: the compiler emits the `checkcast` on the value the inlined block
+ * produced, past the end of the exception table. The catch was unreachable and the reload
+ * still crashed. [Class.cast] throws inside the guarded frame, where it can be caught.
+ */
+internal fun <T : Any> pluginService(serviceClass: Class<T>): T {
+    val instance = ApplicationManager.getApplication().getService(serviceClass)
+        ?: throw IllegalStateException("Cannot find service ${serviceClass.name}")
+    return ownInstance(serviceClass, instance)
 }
+
+/** [instance] as [serviceClass], or a cancellation when it belongs to a newer class loader. */
+internal fun <T : Any> ownInstance(serviceClass: Class<T>, instance: Any): T =
+    try {
+        serviceClass.cast(instance)
+    } catch (mismatch: ClassCastException) {
+        LOG.info(
+            "Abandoning work started before the plugin was reloaded: ${serviceClass.name} now " +
+                "belongs to a newer class loader (${mismatch.message})",
+        )
+        throw ProcessCanceledException()
+    }
 
 private val LOG = logger<ClaudeAcpManager>()
