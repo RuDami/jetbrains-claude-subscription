@@ -51,11 +51,25 @@ class ClaudePermissionsConfigurable(private val project: Project) : Configurable
     /** Which file the fields currently belong to; see [onScopeChanged]. */
     private var previousScope: ClaudeSettingsFile.Scope = ClaudeSettingsFile.Scope.SHARED
 
+    /**
+     * True while the page moves the scope combo itself.
+     *
+     * Setting `selectedItem` fires the same listener a user's choice does. [reset] doing so
+     * asked "save the changes?" in response to Reset, which is a request to discard them;
+     * and putting the old scope back after Cancel asked again, from inside the first dialog.
+     */
+    private var selectingScope = false
+
     override fun getDisplayName(): String = "Claude Code Permissions"
 
-    override fun createComponent(): JComponent {
-        scopeCombo.addActionListener { onScopeChanged() }
+    init {
+        // Here rather than in [createComponent], which may run more than once per instance;
+        // each run added another listener, and each listener its own dialog.
+        scopeCombo.addActionListener { if (!selectingScope) onScopeChanged() }
         modeCombo.addActionListener { syncRulesEnabled() }
+    }
+
+    override fun createComponent(): JComponent {
 
         return panel {
             row("Applies to:") {
@@ -119,7 +133,7 @@ class ClaudePermissionsConfigurable(private val project: Project) : Configurable
 
     override fun reset() {
         previousScope = ClaudeSettingsFile.Scope.SHARED
-        scopeCombo.selectedItem = previousScope
+        selectScope(previousScope)
         loadFromDisk()
     }
 
@@ -172,16 +186,30 @@ class ClaudePermissionsConfigurable(private val project: Project) : Configurable
             )
             when (answer) {
                 Messages.CANCEL -> {
-                    scopeCombo.selectedItem = previousScope
+                    selectScope(previousScope)
                     return
                 }
 
-                Messages.YES -> writeTo(ClaudeSettingsFile(previousScope.fileIn(baseDirectory())))
+                // A failed save keeps the page on the old file, edits intact, rather than
+                // switching away and throwing them out after all.
+                Messages.YES -> if (!writeTo(ClaudeSettingsFile(previousScope.fileIn(baseDirectory())))) {
+                    selectScope(previousScope)
+                    return
+                }
             }
         }
 
         previousScope = scopeCombo.selectedItem as ClaudeSettingsFile.Scope
         loadFromDisk()
+    }
+
+    private fun selectScope(scope: ClaudeSettingsFile.Scope) {
+        selectingScope = true
+        try {
+            scopeCombo.selectedItem = scope
+        } finally {
+            selectingScope = false
+        }
     }
 
     private fun loadFromDisk() {

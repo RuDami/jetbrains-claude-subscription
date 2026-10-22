@@ -7,6 +7,7 @@ import kotlin.io.path.isExecutable
 import kotlin.io.path.listDirectoryEntries
 import kotlin.io.path.readText
 import kotlin.io.path.writeText
+import java.nio.file.attribute.PosixFilePermissions
 import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
 import kotlin.test.Test
@@ -73,5 +74,31 @@ class AtomicWriteTest {
 
         assertTrue(target.exists())
         assertTrue(!target.isExecutable() || System.getProperty("os.name").startsWith("Windows"))
+    }
+
+    /** A move replaces the link itself; `acp.json` kept in a dotfiles repository came unlinked. */
+    @Test
+    fun `writes through a symlink instead of replacing it`() {
+        val real = directory.resolve("real.json")
+        real.writeText("old")
+        val link = Files.createSymbolicLink(directory.resolve("link.json"), real)
+
+        link.writeAtomically("new")
+
+        assertTrue(Files.isSymbolicLink(link))
+        assertEquals("new", real.readText())
+    }
+
+    @Test
+    fun `keeps the permissions the file had`() {
+        if (System.getProperty("os.name").startsWith("Windows")) return
+        val target = directory.resolve("private.json")
+        target.writeText("old")
+        val permissions = PosixFilePermissions.fromString("rw-r-----")
+        Files.setPosixFilePermissions(target, permissions)
+
+        target.writeAtomically("new")
+
+        assertEquals(permissions, Files.getPosixFilePermissions(target))
     }
 }

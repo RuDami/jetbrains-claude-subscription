@@ -61,7 +61,22 @@ truncates first, so a watcher looking in between sees an empty file; for the JSO
 reads as "not valid JSON", which is exactly the state both readers treat as "drop what you
 had".
 
+A move replaces a symlink with a regular file and resets permissions, so `writeAtomically`
+writes through links and copies the old mode. Its temporary name is unique per call — one
+per process let two threads move each other's half-written file into place.
+
 ## Version management
+
+**Install into staging, then move.** npm writing straight into `versions/<v>` meant a killed
+IDE left either a tree that claimed to be installed with dependencies missing, or one with no
+entry point that `installedVersions()` never listed and so nothing ever pruned. Installs now
+go to `staging/` and are moved into place whole; leftovers of both kinds are swept under the
+install lock.
+
+**The install lock polls.** A blocking `FileChannel.lock()` cannot be cancelled, and a
+second lock on the same file inside one JVM throws `OverlappingFileLockException` instead of
+waiting — which is what a plugin reload produces, because the old and new copies have
+separate monitors.
 
 **Never delete the active version.** `pruneOldVersions` kept the newest N, which after a
 rollback is exactly wrong — the running adapter is then the oldest copy on disk. Pass the
@@ -168,6 +183,17 @@ synthetic line number beyond the end of the file (inlined code is attributed to 
 The cast now happens inside a non-inline `ownInstance`, through `Class.cast`, where it can be
 caught; `PluginServicesTest` covers it. When a guard looks dead, read the exception table:
 `javap -c build/classes/kotlin/main/…`.
+
+**Unloading cancels the service scope, not background tasks.** `ClaudeAcpManager` is
+`Disposable` and cancels every indicator it registered (`tracked`) and expires its balloons —
+both hold this class loader, and a leftover "Update now" clicked after a reload ran the old
+copy's code. Pass the task's indicator to `provision` so it is covered.
+
+**Disable is not uninstall.** `beforePluginUnload(isUpdate = false)` fires for both, and is
+not called at all for an uninstall that waits for a restart. Downloads are deleted only from
+`PluginStateListener.uninstall` (public `PluginStateManager`; `PluginInstaller` is
+internal), which fires while the plugin is still loaded in both cases. The listener list is
+static — remove the listener on dispose or it pins the class loader.
 
 ## Verifying a change
 

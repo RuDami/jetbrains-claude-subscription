@@ -3,19 +3,26 @@ package dev.rudami.claudeacp
 import com.google.gson.JsonArray
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
+import com.intellij.ide.plugins.PluginStateManager
+import com.intellij.notification.Notification
 import com.intellij.notification.NotificationAction
 import com.intellij.notification.NotificationGroupManager
 import com.intellij.notification.NotificationType
+import com.intellij.openapi.Disposable
+import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.diagnostic.logger
 import com.intellij.openapi.util.io.FileUtil
+import com.intellij.openapi.progress.ProcessCanceledException
 import com.intellij.openapi.progress.ProgressIndicator
 import com.intellij.openapi.progress.ProgressManager
 import com.intellij.openapi.progress.Task
 import com.intellij.openapi.project.Project
 import com.intellij.util.io.HttpRequests
 import com.intellij.util.io.RequestBuilder
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -23,6 +30,8 @@ import kotlinx.coroutines.launch
 import java.net.URLEncoder
 import java.util.concurrent.ConcurrentHashMap
 import java.nio.charset.StandardCharsets
+import java.nio.file.Files
+import kotlin.io.path.listDirectoryEntries
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.hours
 import kotlin.time.Duration.Companion.minutes
@@ -32,12 +41,57 @@ import kotlin.time.Duration.Companion.minutes
  * it, and watch the npm registry for newer versions.
  */
 @Service(Service.Level.APP)
-class ClaudeAcpManager(private val scope: CoroutineScope) {
+class ClaudeAcpManager(private val scope: CoroutineScope) : Disposable {
 
     private val settings get() = ClaudeAcpSettings.getInstance()
     private val installer get() = AdapterInstaller.getInstance()
 
     private var updateLoop: Job? = null
+
+    /**
+     * Indicators of work running on this plugin's behalf, cancelled in [dispose].
+     *
+     * Unloading the plugin cancels [scope] but not a background task, so an npm install,
+     * a provision or a version switch went on running out of a class loader the IDE had
+     * already let go of — holding it in memory, which is enough for the platform to fall
+     * back to "restart required", and racing the replacement plugin over the same files.
+     */
+    private val running = ConcurrentHashMap.newKeySet<ProgressIndicator>()
+
+    /**
+     * Balloons still on screen. Their actions are lambdas from this class loader, so a
+     * leftover "Update now" both pins the unloaded plugin in memory and, clicked after a
+     * reload, runs the old copy's code. [dispose] expires them.
+     */
+    private val shown = ConcurrentHashMap.newKeySet<Notification>()
+
+    /** Set by [onUninstalled]; from then on nothing installs or registers anything. */
+    @Volatile
+    private var uninstalled = false
+
+    /** The uninstall signal; see [PluginUninstallWatcher]. */
+    private val uninstallWatcher = PluginUninstallWatcher { onUninstalled() }
+
+    init {
+        PluginStateManager.addStateListener(uninstallWatcher)
+    }
+
+    override fun dispose() {
+        PluginStateManager.removeStateListener(uninstallWatcher)
+        running.forEach { it.cancel() }
+        shown.forEach { it.expire() }
+    }
+
+    /** Runs [body] with [indicator] registered for cancellation on unload. */
+    private fun <T> tracked(indicator: ProgressIndicator?, body: () -> T): T {
+        if (indicator == null) return body()
+        running += indicator
+        try {
+            return body()
+        } finally {
+            running -= indicator
+        }
+    }
 
     /** The registry list is stable enough that reopening settings need not refetch it. */
     @Volatile
@@ -73,8 +127,8 @@ class ClaudeAcpManager(private val scope: CoroutineScope) {
      * Safe to call repeatedly — [AcpConfigFile.upsertAgent] rewrites nothing when the entry
      * already matches, which matters because this runs on every IDE start.
      */
-    fun provision(indicator: ProgressIndicator? = null): Result<Unit> = withExclusiveAccess {
-        provisionLocked(indicator)
+    fun provision(indicator: ProgressIndicator? = null): Result<Unit> = tracked(indicator) {
+        withExclusiveAccess { provisionLocked(indicator) }
     }
 
     /**
@@ -88,6 +142,11 @@ class ClaudeAcpManager(private val scope: CoroutineScope) {
     private fun <T> withExclusiveAccess(body: () -> T): T = synchronized(provisionLock, body)
 
     private fun provisionLocked(indicator: ProgressIndicator?): Result<Unit> {
+        // An uninstall that needs a restart leaves this copy running until then, and a
+        // Repair or Apply in that window used to download everything straight back.
+        if (uninstalled) return Result.failure(IllegalStateException("the plugin is being uninstalled"))
+        sweepTrash()
+
         if (!settings.state.manageAgent) {
             LOG.info("Agent management disabled in settings; leaving ${AcpConfigFile.path} alone")
             return Result.success(Unit)
@@ -222,12 +281,48 @@ class ClaudeAcpManager(private val scope: CoroutineScope) {
 
     /**
      * Deletes everything this plugin downloaded, including the running adapter. Only for
-     * uninstall — anywhere else it would leave the agent pointing at a missing launcher.
+     * uninstall and for Remove Agent — anywhere else it would leave the agent pointing at a
+     * missing launcher.
      */
     fun removeAdapterFiles() {
         LOG.info("Removing adapter directory ${installer.root}")
         runCatching { FileUtil.delete(installer.root.toFile()) }
         settings.state.installedVersion = null
+    }
+
+    /**
+     * The plugin is being uninstalled: take the agent out of the chat list and delete the
+     * downloads.
+     *
+     * Arrives on the EDT, and deleting a few hundred megabytes of node_modules there froze
+     * the plugin manager. So the directory is renamed out of the way first — one quick call,
+     * after which nothing points at it — and deleted on a pooled thread. Should that thread
+     * not finish, the next install of the plugin sweeps the leftover; see [provisionLocked].
+     */
+    private fun onUninstalled() {
+        LOG.info("Plugin uninstalled; removing the agent and the downloaded adapters")
+        uninstalled = true
+        running.forEach { it.cancel() }
+        runCatching { removeAgentEntry() }.onFailure { LOG.warn("Could not remove the agent entry", it) }
+        settings.state.installedVersion = null
+
+        val root = installer.root
+        val doomed = runCatching {
+            Files.move(root, root.resolveSibling(root.fileName.toString() + TRASH_SUFFIX + System.nanoTime()))
+        }.getOrNull() ?: root
+        ApplicationManager.getApplication().executeOnPooledThread {
+            runCatching { FileUtil.delete(doomed.toFile()) }
+        }
+    }
+
+    /** Deletes what an uninstall renamed but did not get to delete. */
+    private fun sweepTrash() {
+        val root = installer.root
+        val prefix = root.fileName.toString() + TRASH_SUFFIX
+        runCatching { root.parent.listDirectoryEntries("$prefix*") }.getOrElse { emptyList() }.forEach {
+            LOG.info("Removing ${it.fileName} left by an earlier uninstall")
+            runCatching { FileUtil.delete(it.toFile()) }
+        }
     }
 
     /** Bytes the downloaded adapters occupy. */
@@ -303,7 +398,7 @@ class ClaudeAcpManager(private val scope: CoroutineScope) {
     fun checkForUpdates(manual: Boolean) {
         // Nothing runs the adapter while the agent is removed, so offering to upgrade it is
         // an interruption about software the user has already opted out of.
-        if (!settings.state.manageAgent) return
+        if (uninstalled || !settings.state.manageAgent) return
         if (!manual && settings.state.updatePolicy == UpdatePolicy.OFF) return
 
         val latest = latestVersion().getOrElse { failure ->
@@ -351,7 +446,14 @@ class ClaudeAcpManager(private val scope: CoroutineScope) {
                     settings.state.skippedVersion = latest
                 },
             )
-            .notify(null)
+            .show()
+    }
+
+    /** Shows [this] and keeps it until it expires, so [dispose] can take it down. */
+    private fun Notification.show() {
+        shown += this
+        whenExpired { shown -= this }
+        notify(null)
     }
 
     /**
@@ -377,35 +479,43 @@ class ClaudeAcpManager(private val scope: CoroutineScope) {
         ProgressManager.getInstance().run(
             object : Task.Backgroundable(project, "Installing Claude ACP adapter $version", true) {
                 override fun run(indicator: ProgressIndicator) {
+                    // [onFinished] used to be called from inside [install] on each path it
+                    // knew about, so a cancel, a failed launcher write, or a reload abandoning
+                    // the task skipped it — and the settings page spun forever. It is called
+                    // exactly once, here.
+                    var outcome: Result<Unit> = Result.failure(IllegalStateException("install of $version did not finish"))
                     try {
                         // Held for the whole switch, so a startup provision cannot repoint
                         // the launcher half way through one.
-                        withExclusiveAccess { install(indicator) }
+                        outcome = tracked(indicator) { withExclusiveAccess { install(indicator) } }
+                    } catch (failure: Throwable) {
+                        outcome = Result.failure(failure)
+                        throw failure
                     } finally {
                         installsInFlight.remove(version)
+                        runCatching { onFinished(outcome) }.onFailure { LOG.warn("Install callback failed", it) }
                     }
                 }
 
-                private fun install(indicator: ProgressIndicator) {
+                private fun install(indicator: ProgressIndicator): Result<Unit> {
+                    if (uninstalled) return Result.failure(IllegalStateException("the plugin is being uninstalled"))
+
                     val runtime = NodeRuntimeResolver.resolve()
                     if (runtime == null) {
                         notifyNoNode()
-                        onFinished(Result.failure(IllegalStateException("no node runtime")))
-                        return
+                        return Result.failure(IllegalStateException("no node runtime"))
                     }
 
                     val previous = settings.state.installedVersion
                     val installed = installer.install(version, runtime, indicator)
-                    installed.onFailure { failure ->
+                    val entryPoint = installed.getOrElse { failure ->
                         notify(
                             NotificationType.ERROR,
                             "Could not install adapter $version",
                             failure.message ?: "npm install failed.",
                         )
-                        onFinished(Result.failure(failure))
+                        return Result.failure(failure)
                     }
-
-                    val entryPoint = installed.getOrNull() ?: return
 
                     // Point the launcher at the new build and publish the entry before
                     // recording anything: settings that claim a version the agent is not
@@ -434,7 +544,7 @@ class ClaudeAcpManager(private val scope: CoroutineScope) {
                                 "the adapter process it started with.",
                         )
                     }
-                    onFinished(result)
+                    return result
                 }
             },
         )
@@ -479,11 +589,23 @@ class ClaudeAcpManager(private val scope: CoroutineScope) {
     fun startUpdateLoop() {
         if (updateLoop?.isActive == true) return
 
-        updateLoop = scope.launch {
+        // On the IO dispatcher: the check blocks on HTTP for up to the read timeout, which is
+        // no business of the shared Default pool's few threads.
+        updateLoop = scope.launch(Dispatchers.IO) {
             delay(STARTUP_GRACE)
             while (isActive) {
-                runCatching { checkForUpdates(manual = false) }
-                    .onFailure { LOG.warn("Periodic update check failed", it) }
+                try {
+                    checkForUpdates(manual = false)
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (abandoned: ProcessCanceledException) {
+                    // A reload abandoned this copy; the replacement runs its own loop.
+                    return@launch
+                } catch (failure: Exception) {
+                    // `runCatching` here used to swallow cancellation too, and log the
+                    // control-flow exception a reload raises as a warning on every check.
+                    LOG.warn("Periodic update check failed", failure)
+                }
                 waitForNextCheck()
             }
         }
@@ -520,13 +642,15 @@ class ClaudeAcpManager(private val scope: CoroutineScope) {
         NotificationGroupManager.getInstance()
             .getNotificationGroup(NOTIFICATION_GROUP)
             .createNotification(title, content, type)
-            .notify(null)
+            .show()
     }
 
     companion object {
         const val NOTIFICATION_GROUP: String = "Claude Code ACP Bridge"
 
         private const val HTTP_TIMEOUT_MS = 10_000
+        /** Appended to the adapter directory's name while an uninstall deletes it. */
+        private const val TRASH_SUFFIX = ".uninstalled-"
         private const val ABBREVIATED_PACKUMENT = "application/vnd.npm.install-v1+json"
         private val STARTUP_GRACE = 2.minutes
         private val POLL_SLICE = 1.minutes

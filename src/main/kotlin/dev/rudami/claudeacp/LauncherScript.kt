@@ -63,7 +63,7 @@ object LauncherScript {
         appendLine()
         CLEARED_VARIABLES.forEach { appendLine("unset $it") }
         appendLine()
-        appendLine("PATH=\"${runtime.binDir}:\$PATH\"")
+        appendLine("PATH=${quote(runtime.binDir.toString())}:\"\$PATH\"")
         appendLine("export PATH")
         appendLine()
         appendLine("# Marks this version as in use, so cleanup does not delete the adapter out")
@@ -71,10 +71,20 @@ object LauncherScript {
         appendLine("# shell — which is also what makes the name reliable: exec keeps the pid, so")
         appendLine("# the file names the node process, and a stale marker is one whose pid is")
         appendLine("# gone. Best effort; the plugin also spares versions it sees running.")
-        appendLine(": > \"$versionDirectory/$MARKER_PREFIX\$\$\" 2>/dev/null || true")
+        appendLine(": > ${quote("$versionDirectory/$MARKER_PREFIX")}\"\$\$\" 2>/dev/null || true")
         appendLine()
-        appendLine("exec \"${runtime.node}\" \"$entryPoint\" \"\$@\"")
+        appendLine("exec ${quote(runtime.node.toString())} ${quote(entryPoint.toString())} \"\$@\"")
     }
+
+    /**
+     * Single-quotes [value] for `sh`.
+     *
+     * These paths start in the user's home directory, and splicing them into double quotes
+     * left `$`, a backtick, `"` and `\` live — a home or nvm directory containing any of them
+     * broke the launcher, or ran part of its name as a command. Inside single quotes nothing
+     * is special except the quote itself, which is closed, escaped and reopened.
+     */
+    internal fun quote(value: String): String = "'" + value.replace("'", "'\\''") + "'"
 
     private fun windows(runtime: NodeRuntime, entryPoint: Path): String = buildString {
         appendLine("@echo off")

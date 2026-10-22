@@ -3,14 +3,17 @@ package dev.rudami.claudeacp
 import com.google.gson.GsonBuilder
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
+import com.google.gson.JsonElement
+import java.io.IOException
 import java.io.RandomAccessFile
+import java.nio.channels.FileLock
+import java.nio.channels.OverlappingFileLockException
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
 import kotlin.io.path.createParentDirectories
 import kotlin.io.path.exists
 import kotlin.io.path.readText
-import kotlin.io.path.writeText
 
 /**
  * The IDE's local-agent config, `~/.jetbrains/acp.json`.
@@ -25,6 +28,8 @@ import kotlin.io.path.writeText
 object AcpConfigFile {
 
     private const val AGENT_SERVERS = "agent_servers"
+    private const val LOCK_ATTEMPTS = 50
+    private const val LOCK_RETRY_MS = 100L
 
     private val gson = GsonBuilder().setPrettyPrinting().disableHtmlEscaping().create()
 
@@ -55,9 +60,13 @@ object AcpConfigFile {
     @Synchronized
     fun upsertAgent(name: String, entry: JsonObject): Outcome = withFileLock {
         val root = read() ?: return@withFileLock Outcome.REFUSED_UNPARSEABLE
-        val servers = root.getAsJsonObject(AGENT_SERVERS) ?: JsonObject().also { root.add(AGENT_SERVERS, it) }
+        val servers = when (val existing = root.get(AGENT_SERVERS)) {
+            null -> JsonObject().also { root.add(AGENT_SERVERS, it) }
+            // Something other than an object here is not ours to replace.
+            else -> existing.objectOrNull() ?: return@withFileLock Outcome.REFUSED_UNPARSEABLE
+        }
 
-        if (servers.getAsJsonObject(name) == entry) return@withFileLock Outcome.UNCHANGED
+        if (servers.get(name) == entry) return@withFileLock Outcome.UNCHANGED
 
         servers.add(name, entry)
         write(root)
@@ -75,11 +84,11 @@ object AcpConfigFile {
      */
     @Synchronized
     fun agentsCommandedFrom(commandRoot: Path): List<String> {
-        val servers = read()?.getAsJsonObject(AGENT_SERVERS) ?: return emptyList()
+        val servers = agentServers() ?: return emptyList()
         val prefix = commandRoot.toString()
 
         return servers.keySet().filter { name ->
-            val command = servers.getAsJsonObject(name)?.get("command")?.asString
+            val command = servers.get(name).objectOrNull()?.get("command")?.stringOrNull()
             command != null && command.startsWith(prefix)
         }
     }
@@ -94,10 +103,10 @@ object AcpConfigFile {
      */
     @Synchronized
     fun agentsMentioning(needle: String, except: String): List<String> {
-        val servers = read()?.getAsJsonObject(AGENT_SERVERS) ?: return emptyList()
+        val servers = agentServers() ?: return emptyList()
 
         return servers.keySet().filter { name ->
-            name != except && servers.getAsJsonObject(name)?.toString()?.contains(needle) == true
+            name != except && servers.get(name).objectOrNull()?.toString()?.contains(needle) == true
         }
     }
 
@@ -105,7 +114,7 @@ object AcpConfigFile {
     @Synchronized
     fun removeAgent(name: String): Outcome = withFileLock {
         val root = read() ?: return@withFileLock Outcome.REFUSED_UNPARSEABLE
-        val servers = root.getAsJsonObject(AGENT_SERVERS) ?: return@withFileLock Outcome.UNCHANGED
+        val servers = root.get(AGENT_SERVERS).objectOrNull() ?: return@withFileLock Outcome.UNCHANGED
         if (servers.remove(name) == null) return@withFileLock Outcome.UNCHANGED
 
         write(root)
@@ -129,16 +138,38 @@ object AcpConfigFile {
         val lockFile = path.resolveSibling(path.fileName.toString() + ".lock")
         runCatching { lockFile.createParentDirectories() }
 
-        return runCatching {
-            RandomAccessFile(lockFile.toFile(), "rw").use { handle ->
-                val lock = handle.channel.lock()
-                try {
-                    body()
-                } finally {
-                    runCatching { lock.release() }
-                }
+        // Only taking the lock may fail over to an unlocked write. This used to wrap the body
+        // as well, so a body that threw — an I/O error half way through — ran a second time.
+        val handle = runCatching { RandomAccessFile(lockFile.toFile(), "rw") }.getOrNull() ?: return body()
+        return handle.use {
+            val lock = acquire(handle)
+            try {
+                body()
+            } finally {
+                runCatching { lock?.release() }
             }
-        }.getOrElse { body() }
+        }
+    }
+
+    /**
+     * Waits for the lock, or gives up and returns null.
+     *
+     * A second lock on the same file from inside this JVM does not wait — it throws
+     * [OverlappingFileLockException]. `@Synchronized` normally prevents that, but a plugin
+     * reload leaves work running out of the old class loader, whose copy of this object has a
+     * monitor of its own. So that case is retried rather than read as "no lock available".
+     */
+    private fun acquire(handle: RandomAccessFile): FileLock? {
+        repeat(LOCK_ATTEMPTS) {
+            try {
+                return handle.channel.lock()
+            } catch (_: OverlappingFileLockException) {
+                Thread.sleep(LOCK_RETRY_MS)
+            } catch (_: IOException) {
+                return null
+            }
+        }
+        return null
     }
 
     /**
@@ -152,6 +183,19 @@ object AcpConfigFile {
         val parsed = runCatching { JsonParser.parseString(path.readText()) }.getOrNull() ?: return null
         return parsed.takeIf { it.isJsonObject }?.asJsonObject
     }
+
+    /**
+     * `agent_servers`, or null when it is absent or not an object.
+     *
+     * Gson's `getAsJsonObject` throws on a value of the wrong type, and these run during
+     * startup provisioning — one hand-edited entry holding an array used to abort it.
+     */
+    private fun agentServers(): JsonObject? = read()?.get(AGENT_SERVERS).objectOrNull()
+
+    private fun JsonElement?.objectOrNull(): JsonObject? = this?.takeIf { it.isJsonObject }?.asJsonObject
+
+    private fun JsonElement.stringOrNull(): String? =
+        takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isString }?.asString
 
     private fun write(root: JsonObject) {
         path.createParentDirectories()

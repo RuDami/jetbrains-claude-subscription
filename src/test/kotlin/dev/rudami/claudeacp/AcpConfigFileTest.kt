@@ -144,4 +144,21 @@ class AcpConfigFileTest {
 
         assertEquals(listOf("Old Name"), AcpConfigFile.agentsCommandedFrom(adapterRoot))
     }
+
+    /** Gson's typed getters throw on the wrong shape, and these run during startup. */
+    @Test
+    fun `an entry that is not an object does not break the lookups`() {
+        config.writeText("""{ "agent_servers": { "Odd": [1, 2], "Ours": { "command": ["x"] } } }""")
+
+        assertTrue(AcpConfigFile.agentsCommandedFrom(directory).isEmpty())
+        assertEquals(listOf("Ours"), AcpConfigFile.agentsMentioning("x", except = "Nobody"))
+    }
+
+    @Test
+    fun `refuses to replace agent_servers that is not an object`() {
+        config.writeText("""{ "agent_servers": [] }""")
+
+        assertEquals(AcpConfigFile.Outcome.REFUSED_UNPARSEABLE, AcpConfigFile.upsertAgent("Ours", entry("/a")))
+        assertEquals("""{ "agent_servers": [] }""", config.readText())
+    }
 }

@@ -4,8 +4,10 @@ import com.intellij.execution.configurations.GeneralCommandLine
 import com.intellij.execution.process.CapturingProcessHandler
 import com.intellij.openapi.application.PathManager
 import com.intellij.openapi.diagnostic.logger
+import com.intellij.openapi.util.SystemInfo
 import com.intellij.util.EnvironmentUtil
 import java.io.File
+import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
 import java.util.concurrent.ConcurrentHashMap
@@ -57,7 +59,9 @@ object NodeRuntimeResolver {
     private fun fromOverride(): NodeRuntime? {
         val configured = ClaudeAcpSettings.getInstance().state.nodePathOverride?.takeIf { it.isNotBlank() }
             ?: return null
-        val binDir = Paths.get(configured).parent ?: return null
+        // A hand-edited settings file can hold anything, and an invalid path used to throw out
+        // of provisioning instead of falling back to the automatic search.
+        val binDir = runCatching { Paths.get(configured).parent }.getOrNull() ?: return null
         return runtimeAt(binDir).also {
             if (it == null) LOG.warn("Configured node override '$configured' is not a usable node install")
         }
@@ -78,7 +82,7 @@ object NodeRuntimeResolver {
 
         return path.split(File.pathSeparatorChar)
             .filter { it.isNotBlank() }
-            .map { Paths.get(it) }
+            .mapNotNull { runCatching { Paths.get(it) }.getOrNull() }
     }
 
     /**
@@ -120,10 +124,15 @@ object NodeRuntimeResolver {
 
     /** Returns a runtime rooted at [binDir], or null when it is not a usable node install. */
     private fun runtimeAt(binDir: Path): NodeRuntime? {
-        val node = binDir.resolve("node")
+        val node = binDir.resolve(if (SystemInfo.isWindows) "node.exe" else "node")
         if (!node.isRegularFile() || !node.isExecutable()) return null
 
-        val npmCli = binDir.parent?.resolve("lib/node_modules/npm/bin/npm-cli.js") ?: return null
+        // Windows installs keep npm beside node.exe rather than under lib/.
+        val npmCli = if (SystemInfo.isWindows) {
+            binDir.resolve("node_modules/npm/bin/npm-cli.js")
+        } else {
+            binDir.parent?.resolve("lib/node_modules/npm/bin/npm-cli.js") ?: return null
+        }
         if (!npmCli.isRegularFile()) return null
 
         if (!satisfiesMinimum(node)) return null
@@ -134,27 +143,33 @@ object NodeRuntimeResolver {
     /**
      * Runs `node -v` once per binary and caches it. Reading the version out of the path
      * only works for the IDE's own runtimes, not for Homebrew or a system install.
+     *
+     * Keyed by the binary's modification time as well as its path: `brew upgrade node`
+     * replaces the file in place, and a cache keyed by path alone kept answering for the old
+     * one until the IDE restarted. A probe that produced no version at all — a timeout on a
+     * machine busy starting up — is not cached, so it is not mistaken for a bad binary for
+     * the rest of the session.
      */
-    private fun satisfiesMinimum(node: Path): Boolean = versionCache.computeIfAbsent(node) {
+    private fun satisfiesMinimum(node: Path): Boolean {
+        val key = node to runCatching { Files.getLastModifiedTime(node).toMillis() }.getOrDefault(0L)
+        versionCache[key]?.let { return it }
+
         val probed = runCatching {
             val command = GeneralCommandLine(node.toString(), "-v")
             CapturingProcessHandler(command).runProcess(VERSION_TIMEOUT_MS).stdout.trim()
         }.getOrNull()
 
         val major = probed?.removePrefix("v")?.substringBefore('.')?.toIntOrNull()
-        when {
-            major == null -> {
-                LOG.warn("Could not read a version from '$node' (got '$probed'); skipping it")
-                false
-            }
-
-            major < MINIMUM_MAJOR -> {
-                LOG.info("Skipping node $probed at '$node': adapter needs >= $MINIMUM_MAJOR")
-                false
-            }
-
-            else -> true
+        if (major == null) {
+            LOG.warn("Could not read a version from '$node' (got '$probed'); skipping it")
+            return false
         }
+
+        val usable = major >= MINIMUM_MAJOR
+        if (!usable) LOG.info("Skipping node $probed at '$node': adapter needs >= $MINIMUM_MAJOR")
+        versionCache.keys.removeIf { it.first == node }
+        versionCache[key] = usable
+        return usable
     }
 
     private fun Path.childDirectories(): List<Path> =
@@ -164,6 +179,6 @@ object NodeRuntimeResolver {
 
     /** Concurrent because [resolve] is called both from the startup coroutine and from the
      *  settings dialog on the EDT. */
-    private val versionCache = ConcurrentHashMap<Path, Boolean>()
+    private val versionCache = ConcurrentHashMap<Pair<Path, Long>, Boolean>()
     private val LOG = logger<NodeRuntimeResolver>()
 }

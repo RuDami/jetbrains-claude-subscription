@@ -176,4 +176,20 @@ class ClaudeSettingsFileTest {
             ClaudeSettingsFile.Scope.PERSONAL.fileIn(directory).endsWith(".claude/settings.local.json"),
         )
     }
+
+    /** `"defaultMode": null` used to throw out of the page while it was opening. */
+    @Test
+    fun `values of the wrong type read as absent`() {
+        path.writeText("""{ "permissions": { "defaultMode": null, "allow": "Bash" } }""")
+
+        assertEquals(ClaudeSettingsFile.Permissions(), settings.readPermissions())
+    }
+
+    @Test
+    fun `refuses to write when permissions is not an object`() {
+        path.writeText("""{ "permissions": [] }""")
+
+        assertFalse(settings.write(ClaudeSettingsFile.Permissions(), ClaudeSettingsFile.Permissions(allow = listOf("Edit"))))
+        assertEquals("""{ "permissions": [] }""", path.readText())
+    }
 }

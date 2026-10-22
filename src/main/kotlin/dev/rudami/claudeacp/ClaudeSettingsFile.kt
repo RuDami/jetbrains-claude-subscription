@@ -2,6 +2,7 @@ package dev.rudami.claudeacp
 
 import com.google.gson.GsonBuilder
 import com.google.gson.JsonArray
+import com.google.gson.JsonElement
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
 import java.nio.file.Files
@@ -54,12 +55,12 @@ class ClaudeSettingsFile(val path: Path) {
     }
 
     fun readPermissions(): Permissions {
-        val permissions = read()?.getAsJsonObject(PERMISSIONS) ?: return Permissions()
+        val permissions = read()?.get(PERMISSIONS).objectOrNull() ?: return Permissions()
         return Permissions(
             allow = permissions.strings(ALLOW),
             deny = permissions.strings(DENY),
             ask = permissions.strings(ASK),
-            defaultMode = permissions.get(DEFAULT_MODE)?.asString,
+            defaultMode = permissions.string(DEFAULT_MODE),
         )
     }
 
@@ -85,13 +86,18 @@ class ClaudeSettingsFile(val path: Path) {
     fun write(baseline: Permissions, edited: Permissions): Boolean {
         val root = read() ?: return false
 
-        val node = root.getAsJsonObject(PERMISSIONS) ?: JsonObject()
+        // A `permissions` that is not an object is the user's mistake to fix, not ours to
+        // replace with an empty one.
+        val node = when (val existing = root.get(PERMISSIONS)) {
+            null -> JsonObject()
+            else -> existing.objectOrNull() ?: return false
+        }
         node.putStrings(ALLOW, merge(node.strings(ALLOW), baseline.allow, edited.allow))
         node.putStrings(DENY, merge(node.strings(DENY), baseline.deny, edited.deny))
         node.putStrings(ASK, merge(node.strings(ASK), baseline.ask, edited.ask))
 
         val mode = if (edited.defaultMode == baseline.defaultMode) {
-            node.get(DEFAULT_MODE)?.asString
+            node.string(DEFAULT_MODE)
         } else {
             edited.defaultMode
         }
@@ -120,8 +126,19 @@ class ClaudeSettingsFile(val path: Path) {
         return (onDisk - removed.toSet() + added).distinct()
     }
 
+    /**
+     * Gson's typed getters throw on a value of another type — `"defaultMode": null` or an
+     * `allow` that is a string rather than a list made the page fail to open. Anything of
+     * the wrong shape reads as absent instead.
+     */
     private fun JsonObject.strings(key: String): List<String> =
-        getAsJsonArray(key)?.mapNotNull { runCatching { it.asString }.getOrNull() }.orEmpty()
+        get(key)?.takeIf { it.isJsonArray }?.asJsonArray
+            ?.mapNotNull { runCatching { it.asString }.getOrNull() }.orEmpty()
+
+    private fun JsonObject.string(key: String): String? =
+        get(key)?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isString }?.asString
+
+    private fun JsonElement?.objectOrNull(): JsonObject? = this?.takeIf { it.isJsonObject }?.asJsonObject
 
     private fun JsonObject.putStrings(key: String, values: List<String>) {
         if (values.isEmpty()) {

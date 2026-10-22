@@ -9,6 +9,7 @@ import com.intellij.openapi.progress.ProgressManager
 import com.intellij.openapi.progress.Task
 import com.intellij.openapi.ui.ComboBox
 import com.intellij.openapi.ui.Messages
+import com.intellij.openapi.util.Disposer
 import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.ui.JBColor
 import com.intellij.ui.SimpleListCellRenderer
@@ -47,7 +48,11 @@ class ClaudeAcpConfigurable : Configurable {
     private val diskLabel = JBLabel()
 
     /** Spinner and error line, so a slow registry looks like waiting rather than nothing. */
-    private val busyIcon = AsyncProcessIcon("claude-acp-loading").apply { isVisible = false }
+    /**
+     * Created with the component and disposed with it: the icon owns an animation timer,
+     * and one left undisposed per opened Settings dialog was never collected.
+     */
+    private lateinit var busyIcon: AsyncProcessIcon
     private val messageLabel = JBLabel().apply { isVisible = false }
 
     private val versionCombo = ComboBox<String>()
@@ -103,6 +108,7 @@ class ClaudeAcpConfigurable : Configurable {
     override fun createComponent(): JComponent {
         managedControls.clear()
         disposed = false
+        busyIcon = AsyncProcessIcon("claude-acp-loading").apply { isVisible = false }
 
         return panel {
             row("Status:") {
@@ -138,8 +144,8 @@ class ClaudeAcpConfigurable : Configurable {
                     }.explain("Asks the registry whether a newer adapter has been published.")
 
                     button("Repair") {
-                        inBackground("Repairing the Claude Code agent", "Repairing the installation") {
-                            val result = manager.provision()
+                        inBackground("Repairing the Claude Code agent", "Repairing the installation") { indicator ->
+                            val result = manager.provision(indicator)
                             reloadVersions(refresh = false)
                             onUi {
                                 if (result.isSuccess) {
@@ -291,6 +297,7 @@ class ClaudeAcpConfigurable : Configurable {
      */
     override fun disposeUIResources() {
         disposed = true
+        if (::busyIcon.isInitialized) Disposer.dispose(busyIcon)
         managedControls.clear()
         lastStatus = null
         busy.reset()
@@ -360,8 +367,8 @@ class ClaudeAcpConfigurable : Configurable {
                 onUi { endBusy() }
             }
         } else {
-            inBackground("Applying Claude Code agent settings", "Applying settings") {
-                manager.provision()
+            inBackground("Applying Claude Code agent settings", "Applying settings") { indicator ->
+                manager.provision(indicator)
                 reloadVersions(refresh = false)
             }
         }
@@ -405,8 +412,8 @@ class ClaudeAcpConfigurable : Configurable {
             syncManaged()
             // A first install downloads the adapter, which is the longest wait this page
             // ever produces.
-            inBackground("Setting up the Claude Code agent", "Downloading the adapter") {
-                manager.provision()
+            inBackground("Setting up the Claude Code agent", "Downloading the adapter") { indicator ->
+                manager.provision(indicator)
                 reloadVersions(refresh = false)
             }
         }
@@ -685,14 +692,14 @@ class ClaudeAcpConfigurable : Configurable {
      * button handlers against two `endBusy` calls, and every action left the page spinning.
      * `finally` also covers a body that throws, which nothing did before.
      */
-    private fun inBackground(title: String, busy: String? = null, body: () -> Unit) {
+    private fun inBackground(title: String, busy: String? = null, body: (ProgressIndicator) -> Unit) {
         if (busy != null) beginBusy(busy)
 
         ProgressManager.getInstance().run(
             object : Task.Backgroundable(null, title, false) {
                 override fun run(indicator: ProgressIndicator) {
                     try {
-                        body()
+                        body(indicator)
                     } finally {
                         if (busy != null) onUi { endBusy() }
                     }

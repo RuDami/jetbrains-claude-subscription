@@ -4,15 +4,17 @@ import com.intellij.execution.configurations.GeneralCommandLine
 import com.intellij.execution.process.CapturingProcessHandler
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.diagnostic.logger
+import com.intellij.openapi.progress.ProcessCanceledException
 import com.intellij.openapi.progress.ProgressIndicator
 import com.intellij.openapi.util.io.FileUtil
 import java.io.File
 import java.io.RandomAccessFile
 import java.nio.channels.FileLock
+import java.nio.channels.OverlappingFileLockException
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
-import java.util.concurrent.ConcurrentHashMap
+import java.nio.file.StandardCopyOption
 import kotlin.io.path.createDirectories
 import kotlin.io.path.isDirectory
 import kotlin.io.path.isRegularFile
@@ -43,13 +45,13 @@ class AdapterInstaller {
 
     private val versionsRoot: Path get() = root.resolve("versions")
 
+    /** Where npm writes before the result is moved into [versionsRoot]; see [install]. */
+    private val stagingRoot: Path get() = root.resolve("staging")
+
     fun versionDir(version: String): Path = versionsRoot.resolve(version)
 
     /** The adapter entry point npm unpacks, or null when [version] is not installed. */
-    fun entryPoint(version: String): Path? =
-        versionDir(version)
-            .resolve("node_modules/${ClaudeAcpSettings.PACKAGE_NAME}/dist/index.js")
-            .takeIf { it.isRegularFile() }
+    fun entryPoint(version: String): Path? = entryPointIn(versionDir(version)).takeIf { it.isRegularFile() }
 
     fun isInstalled(version: String): Boolean = entryPoint(version) != null
 
@@ -66,22 +68,34 @@ class AdapterInstaller {
     /**
      * Installs [version] and returns its entry point.
      *
-     * Blocking — callers run it under a background task. A failed install leaves nothing
-     * behind: the half-written version directory is removed so [isInstalled] cannot report
-     * a broken tree as usable.
+     * Blocking — callers run it under a background task. npm writes into a staging directory
+     * that is moved into place only once it holds a complete adapter, so the version
+     * directory either does not exist or is whole. Installing in place, as this used to,
+     * meant an IDE quit or killed half way through npm left a tree that either reported
+     * itself installed with dependencies missing, or — with no entry point yet — was not
+     * listed anywhere and so was never pruned: tens of megabytes nobody would ever delete.
+     *
+     * Cancelling [indicator] stops npm and surfaces as [ProcessCanceledException], not as a
+     * failure, so the caller does not report an error the user asked for.
      */
     fun install(version: String, runtime: NodeRuntime, indicator: ProgressIndicator? = null): Result<Path> {
         entryPoint(version)?.let { return Result.success(it) }
 
         val target = versionDir(version)
+        // Unique per attempt, not just per process: a plugin reload can leave the old copy's
+        // install of the same version running beside the new one's.
+        val staging = stagingRoot.resolve("$version-${ProcessHandle.current().pid()}-${System.nanoTime()}")
         indicator?.text = "Installing ${ClaudeAcpSettings.PACKAGE_NAME}@$version"
 
         return runCatching {
-            withInstallLock {
+            withInstallLock(indicator) {
                 // Another IDE may have installed it while this one waited for the lock.
                 entryPoint(version)?.let { return@withInstallLock it }
 
-                target.createDirectories()
+                // Holding the lock means nothing else is installing, so whatever is left in
+                // staging, or any version directory without an adapter in it, is debris.
+                sweepIncompleteInstalls()
+                staging.createDirectories()
 
                 val command = GeneralCommandLine(
                     runtime.node.toString(),
@@ -97,27 +111,72 @@ class AdapterInstaller {
                     "--registry",
                     ClaudeAcpSettings.getInstance().registry,
                     "--prefix",
-                    target.toString(),
+                    staging.toString(),
                     "${ClaudeAcpSettings.PACKAGE_NAME}@$version",
-                ).withWorkDirectory(target.toFile())
+                ).withWorkDirectory(staging.toFile())
 
                 // npm shells out to node for its own helpers, and behind a corporate proxy it
                 // needs the same variables the user's shell has.
                 command.environment["PATH"] = pathWith(runtime)
                 proxyEnvironment().forEach { (key, value) -> command.environment[key] = value }
 
-                val output = CapturingProcessHandler(command).runProcess(INSTALL_TIMEOUT_MS)
+                // With an indicator, cancelling it kills npm; without one this used to be the
+                // only way, and the Cancel button on an install did nothing for three minutes.
+                val handler = CapturingProcessHandler(command)
+                val output = if (indicator != null) {
+                    handler.runProcessWithProgressIndicator(indicator, INSTALL_TIMEOUT_MS)
+                } else {
+                    handler.runProcess(INSTALL_TIMEOUT_MS)
+                }
+                if (output.isCancelled) throw ProcessCanceledException()
+                if (output.isTimeout) error("npm install did not finish within ${INSTALL_TIMEOUT_MS / 1000} s")
                 if (output.exitCode != 0) {
                     val detail = output.stderr.trim().ifEmpty { output.stdout.trim() }.takeLast(MAX_ERROR_CHARS)
                     error("npm install exited with ${output.exitCode}: $detail")
                 }
 
-                entryPoint(version) ?: error("npm reported success but $target holds no adapter")
+                if (!entryPointIn(staging).isRegularFile()) {
+                    error("npm reported success but installed no adapter")
+                }
+
+                target.parent.createDirectories()
+                Files.move(staging, target, StandardCopyOption.ATOMIC_MOVE)
+                entryPoint(version) ?: error("$target holds no adapter after the move")
             }
-        }.onFailure {
-            LOG.warn("Failed to install adapter $version", it)
-            runCatching { FileUtil.delete(target.toFile()) }
+        }.onFailure { failure ->
+            // The lock is already released here, but the staging name is unique to this
+            // attempt, so nothing else is using it.
+            runCatching { FileUtil.delete(staging.toFile()) }
+            if (failure is ProcessCanceledException) {
+                LOG.info("Install of adapter $version cancelled")
+                throw failure
+            }
+            LOG.warn("Failed to install adapter $version", failure)
         }
+    }
+
+    private fun entryPointIn(prefix: Path): Path =
+        prefix.resolve("node_modules/${ClaudeAcpSettings.PACKAGE_NAME}/dist/index.js")
+
+    /**
+     * Deletes what interrupted installs left behind. Only called under the install lock.
+     *
+     * Covers both generations: staging directories from this code, and version directories
+     * an in-place install from an earlier plugin version abandoned before npm wrote the
+     * entry point. Neither is listed by [installedVersions], so pruning never reached them.
+     */
+    private fun sweepIncompleteInstalls() {
+        runCatching { stagingRoot.listDirectoryEntries() }.getOrElse { emptyList() }.forEach { leftover ->
+            LOG.info("Removing interrupted install ${leftover.name}")
+            runCatching { FileUtil.delete(leftover.toFile()) }
+        }
+
+        runCatching { versionsRoot.listDirectoryEntries() }.getOrElse { emptyList() }
+            .filter { it.isDirectory() && !isInstalled(it.name) }
+            .forEach { leftover ->
+                LOG.info("Removing incomplete adapter directory ${leftover.name}")
+                runCatching { FileUtil.delete(leftover.toFile()) }
+            }
     }
 
     /**
@@ -168,9 +227,15 @@ class AdapterInstaller {
 
         // Partitioned rather than `any { ... }`: that short-circuits on the first live marker
         // and leaves every dead one behind it unswept.
+        // A pid alone is not enough: pids are reused, and a marker whose chat ended long ago
+        // otherwise pinned its version for as long as some unrelated process held that number.
+        // Where the command line is readable it has to name this version; where it is not,
+        // the marker is believed, which errs toward keeping.
+        val directory = versionDir(version).toString()
         val (alive, stale) = markers.partition { marker ->
             val pid = marker.name.removePrefix(LauncherScript.MARKER_PREFIX).toLongOrNull()
-            pid != null && ProcessHandle.of(pid).isPresent
+            val process = pid?.let { ProcessHandle.of(it).orElse(null) }
+            process != null && process.info().commandLine().map { it.contains(directory) }.orElse(true)
         }
 
         stale.forEach { runCatching { Files.deleteIfExists(it) } }
@@ -230,18 +295,41 @@ class AdapterInstaller {
      * simultaneously and leave a half-written tree that [entryPoint] happily reports as
      * usable. An OS file lock is what works across processes; a JVM lock would not.
      */
-    private fun <T> withInstallLock(body: () -> T): T {
+    private fun <T> withInstallLock(indicator: ProgressIndicator?, body: () -> T): T {
         root.createDirectories()
         val lockFile = root.resolve(".install.lock").toFile()
 
         RandomAccessFile(lockFile, "rw").use { handle ->
             var lock: FileLock? = null
             try {
-                lock = handle.channel.lock()
+                lock = acquire(handle, indicator)
                 return body()
             } finally {
                 runCatching { lock?.release() }
             }
+        }
+    }
+
+    /**
+     * Polls for the lock rather than blocking on it.
+     *
+     * A blocking `lock()` cannot be cancelled, so an install queued behind another IDE's
+     * ignored its Cancel button. And inside one JVM a second lock on the file does not wait
+     * at all — it throws [OverlappingFileLockException] — which is exactly what happens when
+     * a plugin reload leaves the old copy's install running while the new copy provisions:
+     * the two have separate monitors, so nothing in this process serialised them.
+     */
+    private fun acquire(handle: RandomAccessFile, indicator: ProgressIndicator?): FileLock {
+        while (true) {
+            indicator?.checkCanceled()
+            val lock = try {
+                handle.channel.tryLock()
+            } catch (_: OverlappingFileLockException) {
+                null
+            }
+            if (lock != null) return lock
+            indicator?.text2 = "Waiting for another install to finish"
+            Thread.sleep(LOCK_POLL_MS)
         }
     }
 
@@ -266,6 +354,7 @@ class AdapterInstaller {
         private const val INSTALL_TIMEOUT_MS = 180_000
         private const val MAX_ERROR_CHARS = 800
         private const val KEEP_VERSIONS = 2
+        private const val LOCK_POLL_MS = 250L
 
         private val PROXY_VARIABLES = listOf(
             "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY",
